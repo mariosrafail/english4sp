@@ -7,7 +7,7 @@
     "dev": "netlify dev"
   },
   "dependencies": {
-    "sqlite3": "^5.1.7",
-    "@netlify/neon": "^0.1.0"
+    "pg": "^8.13.0",
+    "sqlite3": "^5.1.7"
   }
 }
