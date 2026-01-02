@@ -87,12 +87,12 @@ async function initDb() {
 
   const arows = await all(`SELECT id FROM admins LIMIT 1;`);
   if (!arows.length) {
-    const seed = [
-      { username: "admin1", pass: "R4f@il2026" },
-      { username: "admin2", pass: "BananaBlade!26" },
-      { username: "admin3", pass: "OutrageInk#26" },
-      { username: "admin4", pass: "AthensExam$26" },
-      { username: "admin5", pass: "DoubleZ%26" },
+      const seed = [
+      { username: "admin1", pass: "AS8549D1ASD0" },
+      { username: "admin2", pass: "A8S97D401AS0" },
+      { username: "admin3", pass: "ASD129AS5D04" },
+      { username: "admin4", pass: "AS1D0AS8D40D" },
+      { username: "admin5", pass: "ASD410A85SD0" },
     ];
     for (const a of seed) {
       await run(`INSERT INTO admins (username, pass_hash) VALUES (?, ?)`, [
