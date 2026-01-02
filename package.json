@@ -1,0 +1,13 @@
+{
+  "name": "english-exam-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "netlify dev"
+  },
+  "dependencies": {
+    "sqlite3": "^5.1.7",
+    "@netlify/neon": "^0.1.0"
+  }
+}

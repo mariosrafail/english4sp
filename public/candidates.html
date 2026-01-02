@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<title>Candidates</title>
+<link href="/styles.css" rel="stylesheet"/>
+
+</head>
+<body>
+<div class="topbar">
+<div class="topbar-inner">
+<div class="badge"><span>Admin</span><span class="mono">Candidates</span></div>
+<div class="right">
+<a class="badge" href="/admin.html">Back to Admin</a>
+</div>
+</div>
+</div>
+<div class="wrap">
+<div class="card">
+<h1>Candidates</h1>
+<!-- <p>Search updates instantly. Pagination is 20 per page.</p> -->
+<div class="toolbar" style=""><div class="searchWrap" style="width:100%">
+<input id="q" placeholder="Search by Name, ID or Token..."/>
+<button id="clear">Clear</button>
+</div><div class="filtersUnder"><label class="pill" title="Show only candidates who submitted">
+<input checked="" id="onlyDone" type="checkbox"/>
+              Completed only
+            </label></div><div class="controlsRow"><div class="rightControls"><select id="sort">
+<option value="recent">Most recent</option>
+<option value="name">Name (A-Z)</option>
+<option value="grade">Best grade</option>
+</select></div></div></div>
+<div class="kpi">
+<div class="badge">Total: <span class="mono" id="kpiTotal">0</span></div>
+<div class="badge">Filtered: <span class="mono" id="kpiFiltered">0</span></div>
+</div>
+<div class="hr"></div>
+<div style="overflow:auto">
+<table class="table" id="tbl">
+<thead>
+<tr>
+<th>ID</th>
+<th>Name</th>
+<th>Token</th>
+<th>Submitted</th>
+<th>Grade</th>
+</tr>
+</thead>
+<tbody id="tbody">
+<tr><td class="muted" colspan="4">Loading...</td></tr>
+</tbody>
+</table>
+</div>
+<div class="pager">
+<div class="badge">Page <span class="mono" id="pageNum">1</span> / <span class="mono" id="pageMax">1</span></div>
+<button id="prev">Prev</button>
+<button id="next">Next</button>
+</div>
+</div>
+</div>
+
+
+<script type="module" src="/candidates.js"></script>
+</body>
+</html>

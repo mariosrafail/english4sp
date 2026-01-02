@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>English Exam Demo</title>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>English Exam Demo</h1>
+      <p>Enter your exam token to start.</p>
+      <label>Token</label>
+      <input id="token" class="mono" placeholder="Example: AB12CD34"/>
+      <div class="row" style="margin-top:12px">
+        <div class="col">
+          <button id="go" class="primary">Open Exam</button>
+          <div class="small" style="margin-top:10px">If you are the admin, open <a href="/admin.html">Admin Panel</a>.</div>
+        </div>
+      </div>
+      <div class="hr"></div>
+      <div id="msg" class="notice" style="display:none"></div>
+    </div>
+  </div>
+
+
+
+<script type="module" src="/index.js"></script>
+</body>
+</html>

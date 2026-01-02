@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Exam</title>
+  <link rel="stylesheet" href="/styles.css"/>
+</head>
+<body>
+  <div class="topbar">
+    <div class="topbar-inner">
+      <div class="badge"><span>English Exam</span><span id="candidate" class="mono"></span></div>
+      <div class="badge"><span class="small">Time left</span><span id="timer" class="timer mono">00:00</span></div>
+    </div>
+  </div>
+
+  <div class="wrap">
+    <div id="main" class="card">
+      <h1 id="title">Loading...</h1>
+      <div id="status" class="notice" style="display:none"></div>
+
+      <div id="gate" style="display:none">
+        <div class="hr"></div>
+        <h2>Camera check</h2>
+        <p>Camera access is required to start the exam. No recording is stored. The system checks that your face is visible.</p>
+
+        <div class="videoWrap">
+          <div class="videoCard">
+            <div class="faceBox">
+              <video id="video" playsinline autoplay muted></video>
+              <div id="faceOverlay" class="faceOverlay"></div>
+            </div>
+            <div class="small" id="faceHint" style="margin-top:10px">Waiting for camera permission...</div>
+          </div>
+
+          <div class="videoCard">
+            <div class="notice" id="gateNotice">Click "Enable camera" and keep your face visible.</div>
+            <div class="small" style="margin-top:10px">
+              Requirements:
+              <ul>
+                <li>Camera permission granted</li>
+                <li>Face detected for 2 seconds</li>
+              </ul>
+            </div>
+
+            <div class="row" style="margin-top:12px">
+              <div class="col">
+                <button id="enableCam" class="primary">Enable camera</button>
+              </div>
+              <div class="col">
+                <button id="startExam" class="primary" disabled>Start exam</button>
+              </div>
+            </div>
+
+            <!-- <div class="small" style="margin-top:10px">
+              Face detection runs locally. If the browser does not support the built-in detector, a lightweight fallback is loaded.
+            </div> -->
+          </div>
+        </div>
+      </div>
+
+      <div id="content" style="display:none"></div>
+      <div class="hr"></div>
+      <button id="submit" class="primary" style="display:none">Submit</button>
+      <!-- <div class="small" style="margin-top:10px">Camera presence check without recording, only timestamps and status events.</div> -->
+    </div>
+  </div>
+
+
+
+<script type="module" src="/exam.js"></script>
+</body>
+</html>

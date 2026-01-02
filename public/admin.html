@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Admin</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="row" style="justify-content:space-between; align-items:flex-start; gap:16px;">
+        <div>
+          <h1>Admin Panel</h1>
+          <!-- <p class="muted">Basic auth is required. Use your admin username and password.</p> -->
+        </div>
+        <a class="btn" href="/candidates.html">Open Candidates</a>
+      </div>
+
+      <div class="grid3" style="margin-top:16px;">
+        <div>
+          <h2>Create Session Link</h2>
+          <label class="label">Candidate name</label>
+          <input id="candidateName" class="input" value="Candidate"/>
+          <button id="btnGenerate" class="btn primary" style="margin-top:12px; width:100%;">Generate Link</button>
+          <div id="out" class="muted" style="margin-top:10px;"></div>
+        </div>
+
+        <div>
+          <h2>Exam Window</h2>
+
+          <label class="label">Opens at (date and time)</label>
+          <input id="openDT" class="input mono" type="datetime-local" step="60" />
+          <div class="help"><span id="openUtcPreview" class="mono">-</span></div>
+
+          <div class="row2" style="margin-top:10px;">
+            <div>
+              <label class="label">Duration (minutes)</label>
+              <input id="durationMin" class="input mono" type="number" min="1" step="1" value="60"/>
+            </div>
+            <div>
+              <label class="label">Duration (seconds)</label>
+              <input id="durationSec" class="input mono" type="number" min="1" step="1" value="3600"/>
+            </div>
+          </div>
+
+          <!-- <div class="help">Candidates can enter only from open time until open time plus duration. Before that they see a countdown, after that they see "Exam ended".</div> -->
+
+          <button id="btnSaveCfg" class="btn primary" style="margin-top:12px; width:100%;">Save Config</button>
+          <div id="cfgOut" class="help"></div>
+        </div>
+
+        <div>
+          <h2>Status</h2>
+          <div class="notice" id="statusBox" style="display:block;">
+            <div class="muted">Server time</div>
+            <div id="serverNow" class="mono" style="font-weight:800; margin-top:6px;">-</div>
+            <div class="hr" style="margin:12px 0;"></div>
+            <div class="muted">Current window</div>
+            <div id="windowLine" class="mono" style="margin-top:6px;">-</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+
+
+<script type="module" src="/admin.js"></script>
+</body>
+</html>
