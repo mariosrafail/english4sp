@@ -87,7 +87,7 @@ import { apiGet, apiPost, qs, escapeHtml } from "./app.js";
       const url = data.url || "";
       elOut.innerHTML = `
         <div><span class="muted">Session:</span> <span class="mono">${escapeHtml(String(data.sessionId))}</span></div>
-        <div style="margin-top:8px;"><a class="mono" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(location.origin + url)}</a></div>
+        <div style="margin-top:8px;"><a class="mono" href="${escapeHtml(url)}" target="_blank" rel="noopener">${escapeHtml(url)}</a></div>
       `;
     } catch (e) {
       elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
