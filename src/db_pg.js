@@ -206,7 +206,7 @@ async function listCandidates() {
     `SELECT id AS "sessionId", name AS "candidateName", token, submitted, grade
      FROM public.sessions
      ORDER BY id DESC
-     LIMIT 5000`
+     LIMIT 15000`
   );
   return r.rows;
 }
