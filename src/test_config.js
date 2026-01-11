@@ -5,8 +5,8 @@
 // User request: 2026-02-02 17:00 GMT
 const OPEN_AT_UTC_MS = Date.parse("2026-02-02T17:00:00.000Z");
 
-// Fixed duration
-const DURATION_SECONDS = 3600;
+// Fixed duration (minutes)
+const DURATION_MINUTES = 60;
 
 // Fixed test payload (full, includes correct answers for grading)
 const TEST_PAYLOAD_FULL = {
@@ -73,13 +73,13 @@ function getConfig() {
   return {
     serverNow: Date.now(),
     openAtUtc: OPEN_AT_UTC_MS,
-    durationSeconds: DURATION_SECONDS,
+    durationMinutes: DURATION_MINUTES,
   };
 }
 
 module.exports = {
   OPEN_AT_UTC_MS,
-  DURATION_SECONDS,
+  DURATION_MINUTES,
   getTestPayloadFull,
   getTestPayloadForClient,
   getConfig,

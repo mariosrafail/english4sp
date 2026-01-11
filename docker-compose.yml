@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+
+  app:
+    build: .
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgresql://neondb_owner:npg_dSN4MJKp2lkq@ep-floral-field-aeuxm9nl-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+      CORS_ORIGIN: "*"
+    ports:
+      - "8080:8080"
+    depends_on:
+      - db

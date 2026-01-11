@@ -20,16 +20,19 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
   const LS_KEY = (k)=> `exam_${token}_${k}`;
 
-  function fmtUtcStamp(ms){
+  function fmtLocalStamp(ms){
     const d = new Date(Number(ms));
-    const months = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-    const pad = (n)=> String(n).padStart(2,'0');
-    const dd = pad(d.getUTCDate());
-    const mon = months[d.getUTCMonth()];
-    const yyyy = d.getUTCFullYear();
-    const hh = pad(d.getUTCHours());
-    const mm = pad(d.getUTCMinutes());
-    return `${dd} ${mon} ${yyyy}, ${hh}:${mm} UTC`;
+    const fmt = new Intl.DateTimeFormat("en-GB", {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+      timeZoneName: "short",
+    });
+    return fmt.format(d);
   }
 
   function showStatus(text, cls){
@@ -381,11 +384,12 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     const offset = serverNow - Date.now();
     const nowServer = () => Date.now() + offset;
 
-    const durationSeconds = Number(cfg.durationSeconds || 0);
-    const endAt = openAt + Math.max(0, durationSeconds) * 1000;
+    const durationMinutes = Number(cfg.durationMinutes ?? (Number(cfg.durationSeconds || 0) / 60));
+    const durMinSafe = Number.isFinite(durationMinutes) ? Math.max(0, durationMinutes) : 0;
+    const endAt = openAt + Math.round(durMinSafe) * 60 * 1000;
 
-    if (openAt && durationSeconds && nowServer() > endAt) {
-      const endIso = fmtUtcStamp(endAt);
+    if (openAt && durMinSafe && nowServer() > endAt) {
+      const endIso = fmtLocalStamp(endAt);
       elGate.style.display = "none";
       elContent.style.display = "none";
       elSubmit.style.display = "none";
@@ -398,7 +402,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     }
 
     if (openAt && nowServer() < openAt){
-      const openIso = fmtUtcStamp(openAt);
+      const openIso = fmtLocalStamp(openAt);
 
       elGate.style.display = "none";
       elContent.style.display = "none";
@@ -473,8 +477,8 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       try{
         // Enforce that the duration is counted from the global open time.
         // If the candidate waits too long on the camera step, the exam may already be over.
-        if (openAt && durationSeconds && nowServer() > endAt) {
-          const endIso = fmtUtcStamp(endAt);
+        if (openAt && durMinSafe && nowServer() > endAt) {
+          const endIso = fmtLocalStamp(endAt);
           elGate.style.display = "none";
           elContent.style.display = "none";
           elSubmit.style.display = "none";

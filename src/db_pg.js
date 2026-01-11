@@ -1,6 +1,6 @@
 const { Pool } = require("pg");
 const { hashPassword, verifyPassword } = require("./auth");
-const { getTestPayloadFull, getTestPayloadForClient, OPEN_AT_UTC_MS: DEFAULT_OPEN_AT_UTC_MS, DURATION_SECONDS: DEFAULT_DURATION_SECONDS } = require("./test_config");
+const { getTestPayloadFull, getTestPayloadForClient, OPEN_AT_UTC_MS: DEFAULT_OPEN_AT_UTC_MS, DURATION_MINUTES: DEFAULT_DURATION_MINUTES } = require("./test_config");
 
 let pool = null;
 let _appConfig = null;
@@ -54,21 +54,35 @@ async function initDb() {
     CREATE TABLE IF NOT EXISTS app_config (
       id INT PRIMARY KEY CHECK (id = 1),
       open_at_utc_ms BIGINT NOT NULL,
-      duration_seconds INT NOT NULL
+      duration_minutes INT
     );
   `);
 
-  const rows = await q(`SELECT open_at_utc_ms, duration_seconds FROM app_config WHERE id = 1 LIMIT 1;`);
+  // Migrate older schema (duration_seconds -> duration_minutes)
+  await q(`ALTER TABLE app_config ADD COLUMN IF NOT EXISTS duration_minutes INT;`);
+  const cols = await q(
+    `SELECT column_name FROM information_schema.columns WHERE table_name = 'app_config' AND table_schema = 'public';`
+  );
+  const colSet = new Set(cols.rows.map(r => r.column_name));
+  if (colSet.has("duration_seconds")) {
+    await q(
+      `UPDATE app_config
+       SET duration_minutes = COALESCE(duration_minutes, GREATEST(1, ROUND(duration_seconds / 60.0)))
+       WHERE id = 1;`
+    );
+  }
+
+  const rows = await q(`SELECT open_at_utc_ms, duration_minutes FROM app_config WHERE id = 1 LIMIT 1;`);
   if (!rows.rows.length) {
     await q(
-      `INSERT INTO app_config (id, open_at_utc_ms, duration_seconds) VALUES (1, $1, $2);`,
-      [DEFAULT_OPEN_AT_UTC_MS, DEFAULT_DURATION_SECONDS]
+      `INSERT INTO app_config (id, open_at_utc_ms, duration_minutes) VALUES (1, $1, $2);`,
+      [DEFAULT_OPEN_AT_UTC_MS, DEFAULT_DURATION_MINUTES]
     );
-    _appConfig = { openAtUtc: DEFAULT_OPEN_AT_UTC_MS, durationSeconds: DEFAULT_DURATION_SECONDS };
+    _appConfig = { openAtUtc: DEFAULT_OPEN_AT_UTC_MS, durationMinutes: DEFAULT_DURATION_MINUTES };
   } else {
     _appConfig = {
       openAtUtc: Number(rows.rows[0].open_at_utc_ms),
-      durationSeconds: Number(rows.rows[0].duration_seconds),
+      durationMinutes: Number(rows.rows[0].duration_minutes),
     };
   }
 
@@ -122,7 +136,7 @@ async function getSessionForExam(token) {
       candidateName: s.name,
       submitted: !!s.submitted,
       grade: s.grade,
-      durationSeconds: _appConfig?.durationSeconds ?? DEFAULT_DURATION_SECONDS,
+      durationMinutes: _appConfig?.durationMinutes ?? DEFAULT_DURATION_MINUTES,
     },
     test: {
       id: 1,
@@ -227,7 +241,7 @@ function getConfig() {
   return {
     serverNow: Date.now(),
     openAtUtc: _appConfig?.openAtUtc ?? DEFAULT_OPEN_AT_UTC_MS,
-    durationSeconds: _appConfig?.durationSeconds ?? DEFAULT_DURATION_SECONDS,
+    durationMinutes: _appConfig?.durationMinutes ?? DEFAULT_DURATION_MINUTES,
   };
 }
 
@@ -240,14 +254,18 @@ async function verifyAdmin(username, password) {
   return verifyPassword(p, row.rows[0].pass_hash);
 }
 
-async function updateAppConfig({ openAtUtc, durationSeconds }) {
+async function updateAppConfig({ openAtUtc, durationMinutes, durationSeconds }) {
   const o = Number(openAtUtc);
-  const d = Number(durationSeconds);
-  if (!Number.isFinite(o) || !Number.isFinite(d)) throw new Error("Invalid config");
-  if (o < 0 || d <= 0) throw new Error("Invalid config values");
+  const m = Number(durationMinutes ?? (Number(durationSeconds || 0) / 60));
+  const mInt = Math.round(m);
+  if (!Number.isFinite(o) || !Number.isFinite(mInt)) throw new Error("Invalid config");
+  if (o < 0 || mInt <= 0) throw new Error("Invalid config values");
 
-  await q(`UPDATE app_config SET open_at_utc_ms = $1, duration_seconds = $2 WHERE id = 1;`, [o, d]);
-  _appConfig = { openAtUtc: o, durationSeconds: d };
+  await q(`UPDATE app_config SET open_at_utc_ms = $1, duration_minutes = $2 WHERE id = 1;`, [o, mInt]);
+  // Backward compatibility if old column exists
+  try { await q(`UPDATE app_config SET duration_seconds = $1 WHERE id = 1;`, [mInt * 60]); } catch {}
+
+  _appConfig = { openAtUtc: o, durationMinutes: mInt };
   return getConfig();
 }
 

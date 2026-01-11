@@ -4,9 +4,13 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "dev": "netlify dev"
+    "dev": "node server.js",
+    "start": "node server.js"
   },
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^4.19.2",
     "pg": "^8.13.0",
     "sqlite3": "^5.1.7"
   }
