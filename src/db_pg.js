@@ -789,11 +789,13 @@ async function listCandidatesForExaminer({ examinerUsername } = {}) {
         COALESCE(qg.q_writing, '') AS "qWriting",
         qg.speaking_grade AS "speakingGrade",
         qg.writing_grade AS "writingGrade",
-        s.exam_period_id AS "examPeriodId"
+        s.exam_period_id AS "examPeriodId",
+        COALESCE(ep.name, CONCAT('Exam Period ', s.exam_period_id::text)) AS "examPeriodName"
      FROM public.sessions s
      JOIN public.examiner_assignments ea ON ea.session_id = s.id
      JOIN public.examiners ex ON ex.id = ea.examiner_id
      LEFT JOIN public.question_grades qg ON qg.session_id = s.id
+     LEFT JOIN public.exam_periods ep ON ep.id = s.exam_period_id
      WHERE ex.username = $1
      ORDER BY s.id DESC
      LIMIT 15000`,

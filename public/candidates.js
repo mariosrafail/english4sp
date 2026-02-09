@@ -25,6 +25,12 @@ const elReviewClose = qs("#reviewClose");
 const elReviewTitle = qs("#reviewTitle");
 const elReviewMeta = qs("#reviewMeta");
 const elReviewBody = qs("#reviewBody");
+const elExportDetailsOverlay = qs("#exportDetailsOverlay");
+const elExportDetailsYes = qs("#btnExportDetailsYes");
+const elExportDetailsNo = qs("#btnExportDetailsNo");
+const elExportDetailsCancel = qs("#btnExportDetailsCancel");
+const elCandidatesBusyOverlay = qs("#candidatesBusyOverlay");
+const elCandidatesBusyText = qs("#candidatesBusyText");
 
 let allRows = [];
 let filtered = [];
@@ -37,6 +43,7 @@ const selectedIds = new Set();
 let applyTimer = null;
 let isApplying = false;
 let pendingApply = false;
+let _busyCount = 0;
 
 function normalize(x) {
   return String(x || "").trim().toLowerCase();
@@ -79,6 +86,51 @@ function closeReviewModal() {
 function openReviewModal() {
   if (!elReviewOverlay) return;
   elReviewOverlay.style.display = "flex";
+}
+
+function showCandidatesBusy(message) {
+  _busyCount += 1;
+  if (elCandidatesBusyText) {
+    elCandidatesBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
+  }
+  if (elCandidatesBusyOverlay) elCandidatesBusyOverlay.style.display = "flex";
+}
+
+function hideCandidatesBusy() {
+  _busyCount = Math.max(0, _busyCount - 1);
+  if (_busyCount === 0 && elCandidatesBusyOverlay) {
+    elCandidatesBusyOverlay.style.display = "none";
+  }
+}
+
+function askIncludeDetailedGrades() {
+  return new Promise((resolve) => {
+    if (!elExportDetailsOverlay || !elExportDetailsYes || !elExportDetailsNo || !elExportDetailsCancel) {
+      resolve(false);
+      return;
+    }
+
+    elExportDetailsOverlay.style.display = "flex";
+
+    const cleanup = () => {
+      elExportDetailsOverlay.style.display = "none";
+      elExportDetailsYes.removeEventListener("click", onYes);
+      elExportDetailsNo.removeEventListener("click", onNo);
+      elExportDetailsCancel.removeEventListener("click", onCancel);
+      elExportDetailsOverlay.removeEventListener("click", onOverlayClick);
+    };
+    const onYes = () => { cleanup(); resolve(true); };
+    const onNo = () => { cleanup(); resolve(false); };
+    const onCancel = () => { cleanup(); resolve(null); };
+    const onOverlayClick = (e) => {
+      if (e.target === elExportDetailsOverlay) onCancel();
+    };
+
+    elExportDetailsYes.addEventListener("click", onYes);
+    elExportDetailsNo.addEventListener("click", onNo);
+    elExportDetailsCancel.addEventListener("click", onCancel);
+    elExportDetailsOverlay.addEventListener("click", onOverlayClick);
+  });
 }
 
 function getPeriodById(id) {
@@ -267,11 +319,12 @@ function render() {
   updateHeaderCheckbox();
 }
 
-async function exportRows(rows, scopeLabel) {
+async function exportRows(rows, scopeLabel, includeDetailed = false) {
   if (!rows.length) throw new Error("No rows to export");
   const payloadRows = rows.map((r) => {
     const sid = Number(r.sessionId || 0);
     return {
+      sessionId: sid,
       examPeriodId: r.examPeriodId ?? "",
       examPeriodName: getPeriodName(r.examPeriodId),
       candidateCode: `S-${String(sid).padStart(6, "0")}`,
@@ -287,7 +340,7 @@ async function exportRows(rows, scopeLabel) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
-    body: JSON.stringify({ scope: scopeLabel, rows: payloadRows }),
+    body: JSON.stringify({ scope: scopeLabel, includeDetailed: !!includeDetailed, rows: payloadRows }),
   });
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
@@ -382,10 +435,14 @@ elBtnExportSelected?.addEventListener("click", async () => {
   try {
     elBtnExportSelected.disabled = true;
     const rows = allRows.filter((r) => selectedIds.has(Number(r.sessionId)));
-    await exportRows(rows, "selected");
+    const includeDetailed = await askIncludeDetailedGrades();
+    if (includeDetailed === null) return;
+    showCandidatesBusy("Processing. Don't close this page. Please wait...");
+    await exportRows(rows, "selected", includeDetailed);
   } catch (e) {
     alert(e?.message || String(e));
   } finally {
+    hideCandidatesBusy();
     elBtnExportSelected.disabled = false;
   }
 });

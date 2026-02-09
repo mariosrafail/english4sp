@@ -518,24 +518,158 @@ app.post("/api/admin/export-candidates", async (req, res) => {
   if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
 
   const rowsIn = Array.isArray(req.body?.rows) ? req.body.rows : [];
+  const includeDetailed = !!req.body?.includeDetailed;
   if (!rowsIn.length) return res.status(400).json({ error: "No rows to export" });
   if (rowsIn.length > 50000) return res.status(400).json({ error: "Too many rows to export" });
 
-  const rows = rowsIn.map((r) => ({
-    "Exam Period Id": Number(r.examPeriodId ?? "") || "",
-    "Exam Period": String(r.examPeriodName || ""),
-    "Candidate Code": String(r.candidateCode || ""),
-    "Name": String(r.candidateName || ""),
-    "Token": String(r.token || ""),
-    "Submitted": r.submitted ? "YES" : "NO",
-    "Grade": r.totalGrade ?? "",
-    "Disqualified": r.disqualified ? "YES" : "NO",
-  }));
+  function softWrapText(text, maxCharsPerLine = 70) {
+    const src = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const outLines = [];
+    for (const rawLine of src.split("\n")) {
+      const line = String(rawLine || "");
+      if (line.length <= maxCharsPerLine) {
+        outLines.push(line);
+        continue;
+      }
+      const words = line.split(/\s+/).filter(Boolean);
+      if (!words.length) {
+        outLines.push("");
+        continue;
+      }
+      let cur = "";
+      for (const w of words) {
+        if (!cur) {
+          cur = w;
+          continue;
+        }
+        if ((cur + " " + w).length <= maxCharsPerLine) cur += " " + w;
+        else {
+          outLines.push(cur);
+          cur = w;
+        }
+      }
+      if (cur) outLines.push(cur);
+    }
+    return outLines.join("\r\n");
+  }
 
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, "admin_candidates");
-  const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx", cellStyles: true });
+  const payload = getTestPayloadFull();
+  const exported = [];
+  for (const r of rowsIn) {
+    const sid = Number(r.sessionId || 0);
+    const base = {
+      examPeriod: String(r.examPeriodName || ""),
+      candidateCode: String(r.candidateCode || ""),
+      name: String(r.candidateName || ""),
+      token: String(r.token || ""),
+      submitted: r.submitted ? "YES" : "NO",
+      grade: r.totalGrade ?? "",
+      disqualified: r.disqualified ? "YES" : "NO",
+    };
+
+    if (!includeDetailed || !Number.isFinite(sid) || sid <= 0) {
+      exported.push(base);
+      continue;
+    }
+
+    let qg = null;
+    try { qg = await DB.getQuestionGrades(sid); } catch {}
+    const answersObj = parseAnswersJson(qg?.answersJson);
+    const review = buildReviewItems(payload, answersObj);
+    const objectiveEarned = Number(review.objectiveEarned || 0);
+    const objectiveMax = Number(review.objectiveMax || 0);
+    const objectivePct = objectiveMax > 0 ? Math.round((objectiveEarned / objectiveMax) * 1000) / 10 : 0;
+    const writingGrade = qg?.writingGrade == null ? "" : `${Number(qg.writingGrade)}%`;
+    const speakingGrade = qg?.speakingGrade == null ? "" : `${Number(qg.speakingGrade)}%`;
+    const totalGrade = qg?.totalGrade == null ? (base.grade === "" ? "" : `${Number(base.grade)}%`) : `${Number(qg.totalGrade)}%`;
+    const breakdown = (review.items || [])
+      .map((it) => {
+        if (it.isCorrect === true) return `${it.id}: Correct`;
+        if (it.isCorrect === false) return `${it.id}: Wrong`;
+        return `${it.id}: N/A`;
+      })
+      .join(" | ");
+
+    exported.push({
+      ...base,
+      objective: `${objectiveEarned}/${objectiveMax}`,
+      objectivePercent: `${objectivePct}%`,
+      writingGrade,
+      speakingGrade,
+      totalGrade,
+      writingText: softWrapText(String(qg?.qWriting || ""), 80),
+      detailedBreakdown: softWrapText(breakdown, 90),
+    });
+  }
+
+  const workbook = new ExcelJS.Workbook();
+  const ws = workbook.addWorksheet("admin_candidates");
+  const columns = includeDetailed
+    ? [
+        { header: "Exam Period", key: "examPeriod" },
+        { header: "Candidate Code", key: "candidateCode" },
+        { header: "Name", key: "name" },
+        { header: "Token", key: "token" },
+        { header: "Submitted", key: "submitted" },
+        { header: "Grade", key: "grade" },
+        { header: "Disqualified", key: "disqualified" },
+        { header: "Objective", key: "objective" },
+        { header: "Objective %", key: "objectivePercent" },
+        { header: "Writing Grade", key: "writingGrade" },
+        { header: "Speaking Grade", key: "speakingGrade" },
+        { header: "Total Grade", key: "totalGrade" },
+        { header: "Writing Text", key: "writingText" },
+        { header: "Detailed Breakdown", key: "detailedBreakdown" },
+      ]
+    : [
+        { header: "Exam Period", key: "examPeriod" },
+        { header: "Candidate Code", key: "candidateCode" },
+        { header: "Name", key: "name" },
+        { header: "Token", key: "token" },
+        { header: "Submitted", key: "submitted" },
+        { header: "Grade", key: "grade" },
+        { header: "Disqualified", key: "disqualified" },
+      ];
+  ws.columns = columns.map((c) => ({ ...c, width: 14 }));
+  ws.getRow(1).font = { bold: true };
+
+  for (const row of exported) ws.addRow(row);
+
+  const wrapKeys = new Set(["writingText", "detailedBreakdown", "name"]);
+  for (let c = 1; c <= ws.columnCount; c++) {
+    const col = ws.getColumn(c);
+    const key = String(col.key || "");
+    let maxLen = String(col.header || "").length;
+    col.eachCell({ includeEmpty: true }, (cell, rowNumber) => {
+      const text = String(cell.value ?? "");
+      for (const ln of text.split(/\r?\n/)) maxLen = Math.max(maxLen, ln.length);
+      if (rowNumber >= 2 && wrapKeys.has(key)) cell.alignment = { wrapText: true, vertical: "top" };
+    });
+    const width = wrapKeys.has(key)
+      ? Math.min(95, Math.max(16, Math.ceil(maxLen * 0.95)))
+      : Math.min(40, Math.max(10, Math.ceil(maxLen * 1.1)));
+    col.width = width;
+  }
+
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    let neededLines = 1;
+    for (let c = 1; c <= ws.columnCount; c++) {
+      const col = ws.getColumn(c);
+      const key = String(col.key || "");
+      if (!wrapKeys.has(key)) continue;
+      const text = String(row.getCell(c).value || "");
+      const colChars = Math.max(12, Math.floor(Number(col.width || 20)));
+      const lines = text
+        .split(/\r?\n/)
+        .reduce((sum, ln) => sum + Math.max(1, Math.ceil(String(ln).length / colChars)), 0);
+      neededLines = Math.max(neededLines, lines);
+    }
+    row.height = Math.min(260, Math.max(20, neededLines * 15));
+  }
+
+  const out = await workbook.xlsx.writeBuffer();
+  const buf = Buffer.from(out);
 
   const scopeRaw = String(req.body?.scope || "selected").trim().replace(/[^A-Za-z0-9._-]/g, "_");
   const scope = scopeRaw || "selected";
@@ -578,6 +712,13 @@ app.get("/api/examiner/candidates", async (req, res) => {
   const a = await examinerAuth(req, res);
   if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
   res.json(await DB.listCandidatesForExaminer({ examinerUsername: a.user }));
+});
+
+app.get("/api/examiner/exam-periods", async (req, res) => {
+  await ensureInit();
+  const a = await examinerAuth(req, res);
+  if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+  res.json(await DB.listExamPeriods());
 });
 
 app.post("/api/examiner/export-excel", async (req, res) => {

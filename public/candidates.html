@@ -6,6 +6,7 @@
 <meta content="width=device-width, initial-scale=1" name="viewport"/>
 <title>Candidates</title>
 <link href="/styles.css" rel="stylesheet"/>
+<link rel="icon" href="/favicon.ico"/>
 
 </head>
 <body>
@@ -89,8 +90,28 @@
   </div>
 </div>
 
+<div id="exportDetailsOverlay" style="display:none; position:fixed; inset:0; background:rgba(11,16,32,0.45); z-index:10025; align-items:center; justify-content:center; padding:16px;">
+  <div class="card" style="width:min(500px, 100%);">
+    <h2 style="margin-top:0;">Export Options</h2>
+    <p class="muted" style="margin-top:6px;">Include detailed grades in this export?</p>
+    <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:14px;">
+      <button id="btnExportDetailsCancel" class="btn" type="button" style="width:auto; min-width:100px;">Cancel</button>
+      <button id="btnExportDetailsNo" class="btn" type="button" style="width:auto; min-width:100px;">No</button>
+      <button id="btnExportDetailsYes" class="btn primary" type="button" style="width:auto; min-width:100px;">Yes</button>
+    </div>
+  </div>
+</div>
+
+<div id="candidatesBusyOverlay" class="adminBusyOverlay" style="display:none;" aria-live="polite" aria-busy="true">
+  <div class="adminBusyCard">
+    <div class="adminBusySpinner" aria-hidden="true"></div>
+    <div id="candidatesBusyText" class="adminBusyText">Processing. Don't close this page. Please wait...</div>
+  </div>
+</div>
+
 
 <script type="module" src="/candidates.js"></script>
 </body>
 </html>
+
 

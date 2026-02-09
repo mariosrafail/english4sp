@@ -17,6 +17,7 @@ const elExportXls = qs("#exportXls");
 const elSwitchExaminer = qs("#switchExaminer");
 
 let allRows = [];
+let allPeriods = [];
 let filtered = [];
 let page = 1;
 const PAGE_SIZE = 16;
@@ -72,21 +73,39 @@ function applySort(rows) {
   return out;
 }
 
+function getExamPeriodName(id) {
+  const n = Number(id);
+  const p = (allPeriods || []).find((x) => Number(x.id) === n);
+  if (p && String(p.name || "").trim()) return String(p.name).trim();
+  const row = (allRows || []).find((r) => Number(r.examPeriodId) === n && String(r.examPeriodName || "").trim());
+  const name = String(row?.examPeriodName || "").trim();
+  return name || `Exam Period ${n}`;
+}
+
 function rebuildExamPeriodOptions() {
   if (!elExamPeriod) return;
 
   const current = String(elExamPeriod.value || "");
-  const ids = Array.from(
+  let ids = Array.from(
     new Set(
-      (allRows || [])
-        .map((r) => Number(r.examPeriodId))
+      (allPeriods || [])
+        .map((p) => Number(p.id))
         .filter((n) => Number.isFinite(n))
     )
   ).sort((a, b) => a - b);
+  if (!ids.length) {
+    ids = Array.from(
+      new Set(
+        (allRows || [])
+          .map((r) => Number(r.examPeriodId))
+          .filter((n) => Number.isFinite(n))
+      )
+    ).sort((a, b) => a - b);
+  }
 
   // Keep first option (All)
   const keepAll = `<option value="">All exam periods</option>`;
-  const opts = ids.map((id) => `<option value="${id}">${id}</option>`).join("");
+  const opts = ids.map((id) => `<option value="${id}">${escapeHtml(getExamPeriodName(id))}</option>`).join("");
   elExamPeriod.innerHTML = keepAll + opts;
 
   // Restore previous selection if still available
@@ -127,8 +146,9 @@ function applyFilters(resetPage = true) {
       const sidPad = sid.padStart(6, "0");
       const idLabel = `s-${sidPad}`;
       const ep = String(r.examPeriodId ?? "");
+      const epName = normalize(r.examPeriodName || getExamPeriodName(r.examPeriodId));
 
-      const hay = `${sid} ${sidPad} ${idLabel} s${sidPad} ${ep}`;
+      const hay = `${sid} ${sidPad} ${idLabel} s${sidPad} ${ep} ${epName}`;
       if (hay.includes(q)) return true;
 
       if (!qKey) return false;
@@ -303,15 +323,22 @@ elTbody.addEventListener("click", async (ev) => {
 
 async function load() {
   elTbody.innerHTML = `<tr><td colspan="5" class="muted">Loading...</td></tr>`;
-  allRows = await apiGet("/api/examiner/candidates");
-  if (!Array.isArray(allRows)) allRows = [];
+  const [rows, periods] = await Promise.all([
+    apiGet("/api/examiner/candidates"),
+    apiGet("/api/examiner/exam-periods").catch(() => []),
+  ]);
+  allRows = Array.isArray(rows) ? rows : [];
+  allPeriods = Array.isArray(periods) ? periods : [];
   rebuildExamPeriodOptions();
   applyFilters(false);
 }
 
 async function autoRefresh() {
   try {
-    const fresh = await apiGet("/api/examiner/candidates");
+    const [fresh, periods] = await Promise.all([
+      apiGet("/api/examiner/candidates"),
+      apiGet("/api/examiner/exam-periods").catch(() => []),
+    ]);
     if (!Array.isArray(fresh)) return;
     let changed = false;
 
@@ -337,8 +364,25 @@ async function autoRefresh() {
       }
     }
 
+    const newPeriods = Array.isArray(periods) ? periods : [];
+    if (!changed) {
+      if (!Array.isArray(allPeriods) || newPeriods.length !== allPeriods.length) {
+        changed = true;
+      } else {
+        for (let i = 0; i < newPeriods.length; i++) {
+          const a = allPeriods[i];
+          const b = newPeriods[i];
+          if (!a || !b || Number(a.id) !== Number(b.id) || String(a.name || "") !== String(b.name || "")) {
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+
     if (changed) {
       allRows = fresh;
+      allPeriods = newPeriods;
       rebuildExamPeriodOptions();
       applyFilters(false);
     }

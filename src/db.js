@@ -432,6 +432,7 @@ async function listCandidatesForExaminer({ examPeriodId } = {}) {
     ? `SELECT
          s.id AS sessionId,
          s.exam_period_id AS examPeriodId,
+         COALESCE(epd.name, 'Exam Period ' || s.exam_period_id) AS examPeriodName,
          s.token,
          s.submitted,
          COALESCE(q.q_writing, '') AS qWriting,
@@ -439,12 +440,14 @@ async function listCandidatesForExaminer({ examPeriodId } = {}) {
          q.writing_grade AS writingGrade
        FROM sessions s
        LEFT JOIN question_grades q ON q.session_id = s.id
+       LEFT JOIN exam_periods epd ON epd.id = s.exam_period_id
        WHERE s.exam_period_id = ?
        ORDER BY s.id DESC
        LIMIT 5000`
      : `SELECT
          s.id AS sessionId,
          s.exam_period_id AS examPeriodId,
+         COALESCE(epd.name, 'Exam Period ' || s.exam_period_id) AS examPeriodName,
          s.token,
          s.submitted,
          COALESCE(q.q_writing, '') AS qWriting,
@@ -452,6 +455,7 @@ async function listCandidatesForExaminer({ examPeriodId } = {}) {
          q.writing_grade AS writingGrade
        FROM sessions s
        LEFT JOIN question_grades q ON q.session_id = s.id
+       LEFT JOIN exam_periods epd ON epd.id = s.exam_period_id
        ORDER BY s.id DESC
        LIMIT 5000`;
 
