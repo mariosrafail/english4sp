@@ -1,0 +1,3 @@
+/health /.netlify/functions/api/health 200
+/api/* /.netlify/functions/api/:splat 200
+/* /index.html 200

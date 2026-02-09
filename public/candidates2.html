@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Examiner</title>
+  <link href="/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <div class="topbar">
+    <!-- <div class="topbar-inner"> -->
+      <!-- <div class="badge"><span>Examiner</span><span class="mono">Candidates</span></div> -->
+    <!-- </div> -->
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+        <button id="switchExaminer" type="button">Log in as another examiner (testing)</button>
+      </div>
+      <h1>Candidates</h1>
+      <div class="toolbar">
+        <div class="searchWrap" style="width:100%">
+          <input id="q" placeholder="Search by ID..." />
+          <button id="clear">Clear</button>
+        </div>
+
+        <div class="filtersUnder">
+          <label class="pill" title="Show only candidates who submitted">
+            <input id="onlyDone" type="checkbox" />
+            Completed only
+          </label>
+            <label class="pill" title="Toggle whether disqualified candidates are shown">
+              <input id="onlyDisq" type="checkbox" />
+              Show disqualified
+            </label>
+        </div>
+
+        <div class="controlsRow">
+          <div class="rightControls">
+            <select id="examPeriod" title="Filter by exam period">
+              <option value="">All exam periods</option>
+            </select>
+            <button id="exportXls">Export Excel (.xlsx)</button>
+          </div>
+        </div>
+      </div>
+      <div class="kpi">
+        <div class="badge">Total: <span class="mono" id="kpiTotal">0</span></div>
+        <div class="badge">Filtered: <span class="mono" id="kpiFiltered">0</span></div>
+      </div>
+      <div class="hr"></div>
+      <div style="overflow:auto">
+        <table class="table" id="tbl">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <!-- <th>Submitted</th> -->
+              <th>Writing</th>
+              <th>Writing Grade<br>(1-100)</th>
+              <th>Speaking Grade<br>(1-100)</th>
+              <th>Save</th>
+              <!-- <th>Exam Period</th> -->
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td class="muted" colspan="5">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <div class="badge">Page <span class="mono" id="pageNum">1</span> / <span class="mono" id="pageMax">1</span></div>
+        <button id="prev">Prev</button>
+        <button id="next">Next</button>
+      </div>
+    </div>
+  </div>
+  <script type="module" src="/candidates2.js"></script>
+</body>
+</html>

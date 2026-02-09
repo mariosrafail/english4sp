@@ -1,0 +1,96 @@
+﻿<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1" name="viewport"/>
+<title>Candidates</title>
+<link href="/styles.css" rel="stylesheet"/>
+
+</head>
+<body>
+<div class="wrap">
+<div class="card">
+<div style="margin-bottom:10px">
+<a class="badge" href="/admin.html" aria-label="Back to Admin" title="Back to Admin" style="display:inline-flex; align-items:center; justify-content:center; width:46px; height:42px; padding:0;">
+<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:22px; height:22px;">
+<path d="M14.7 5.3a1 1 0 0 1 0 1.4L10.41 11H20a1 1 0 1 1 0 2h-9.59l4.3 4.3a1 1 0 1 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.41 0Z" fill="currentColor"/>
+</svg>
+</a>
+</div>
+<h1>Candidates</h1>
+<!-- <p>Search updates instantly. Pagination is 20 per page.</p> -->
+<div class="toolbar" style=""><div class="searchWrap" style="width:100%">
+<input id="q" placeholder="Search by Name, ID or Token..."/>
+<button id="clear">Clear</button>
+</div><div class="filtersUnder">
+  <label class="pill" title="Show only candidates who submitted">
+    <input id="onlyDone" type="checkbox"/>
+    Completed only
+  </label>
+  <label class="pill" title="Toggle whether disqualified candidates are shown">
+    <input checked="" id="onlyDisq" type="checkbox"/>
+    Show disqualified
+  </label>
+</div><div class="controlsRow"><div class="rightControls"><select id="examPeriod">
+<option value="">All exam periods</option>
+</select><select id="examinerFilter">
+<option value="">All examiners</option>
+<option value="examiner1">examiner1</option>
+<option value="examiner2">examiner2</option>
+<option value="examiner3">examiner3</option>
+<option value="examiner4">examiner4</option>
+<option value="examiner5">examiner5</option>
+</select><select id="sort">
+<option value="recent">Most recent</option>
+<option value="name">Name (A-Z)</option>
+<option value="grade">Best grade</option>
+</select></div></div><div class="bulkActionsBox"><button id="btnSelectVisible">Select all</button><button id="btnClearSelection">Clear selection</button><button id="btnExportSelected">Export selected candidates to .xlsx</button></div></div>
+<div class="kpi">
+<div class="badge">Total: <span class="mono" id="kpiTotal">0</span></div>
+<div class="badge">Filtered: <span class="mono" id="kpiFiltered">0</span></div>
+<div class="badge">Selected: <span class="mono" id="kpiSelected">0</span></div>
+</div>
+<div class="hr"></div>
+<div style="overflow:auto">
+<table class="table" id="tbl">
+<thead>
+<tr>
+<th style="width:48px"><input id="chkAll" type="checkbox" title="Select all visible"/></th>
+<th>ID</th>
+<th>Name</th>
+<th>Exam Period</th>
+<th>Examiner</th>
+<th>Token</th>
+<th>Submitted</th>
+<th>Grade</th>
+<th style="width:64px">Delete</th>
+</tr>
+</thead>
+<tbody id="tbody">
+<tr><td class="muted" colspan="9">Loading...</td></tr>
+</tbody>
+</table>
+</div>
+<div class="pager">
+<div class="badge">Page <span class="mono" id="pageNum">1</span> / <span class="mono" id="pageMax">1</span></div>
+<button id="prev">Prev</button>
+<button id="next">Next</button>
+</div>
+</div>
+</div>
+
+<div id="reviewOverlay" class="reviewOverlay" style="display:none">
+  <div class="reviewModal" role="dialog" aria-modal="true" aria-labelledby="reviewTitle">
+    <button id="reviewClose" class="reviewCloseBtn" type="button" aria-label="Close">X</button>
+    <h2 id="reviewTitle">Candidate Review</h2>
+    <div id="reviewMeta" class="small"></div>
+    <div id="reviewBody" class="reviewBody"></div>
+  </div>
+</div>
+
+
+<script type="module" src="/candidates.js"></script>
+</body>
+</html>
+

@@ -1,0 +1,20 @@
+{
+  "name": "english-exam-demo",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "exceljs": "^4.4.0",
+    "express": "^4.19.2",
+    "multer": "^2.0.2",
+    "pg": "^8.13.0",
+    "sqlite3": "^5.1.7",
+    "xlsx": "^0.18.5"
+  }
+}

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Examiner Login</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <style>
+    body{
+      background: #f8faff;
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:24px;
+    }
+    .landing{
+      width:100%;
+      max-width:460px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius:18px;
+      box-shadow: 0 20px 40px rgba(175, 175, 175, 0.45);
+      padding:28px;
+      backdrop-filter: blur(10px);
+    }
+    .logoWrap{
+      display:flex;
+      justify-content:center;
+      margin: 60px 0 18px;
+    }
+    .logoWrap img{
+      width:250px;
+      height:auto;
+      display:block;
+    }
+    .title{
+      text-align:center;
+      margin: 0 0 18px;
+    }
+    .title h1{ margin:0; font-size:20px; }
+    .title p{ margin:8px 0 0; opacity:0.8; }
+    .btnRow{ display:flex; gap:10px; }
+    .btnRow button{ flex:1; }
+    .note{ margin-top:12px; opacity:0.75; font-size:12px; text-align:center; }
+  </style>
+</head>
+<body>
+
+  <div class="landing">
+    <div class="logoWrap">
+      <img src="/img/logo.png" alt="Logo"/>
+    </div>
+
+    <div class="title">
+      <h1>Examiner Login</h1>
+      <p>Use your examiner credentials to access the panel.</p>
+    </div>
+
+    <label>Username</label>
+    <input id="username" class="mono" placeholder="admin" autocomplete="username"/>
+
+    <label>Password</label>
+    <input id="password" type="password" class="mono" placeholder="••••••••" autocomplete="current-password"/>
+
+    <div class="btnRow" style="margin-top:12px">
+      <button id="loginBtn" class="primary">Log in</button>
+      <button id="logoutBtn" style="display:none">Log out</button>
+    </div>
+
+    <div id="msg" class="notice" style="display:none; margin-top:12px"></div>
+    <!-- <div class="note">If you are a candidate, open the exam link you received.</div> -->
+  </div>
+
+<script type="module" src="/examiners_login.js"></script>
+</body>
+</html>
