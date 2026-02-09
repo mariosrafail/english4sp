@@ -383,6 +383,96 @@ async function assignSessionsToLeastLoadedExaminers({ sessionIds, examPeriodId, 
   return { assigned };
 }
 
+// Batch strategy for Excel imports:
+// split sessions as evenly as possible across all examiners (max delta 1 in the batch).
+async function assignSessionsBalancedAcrossExaminers({ sessionIds, examPeriodId, client = null }) {
+  const sids = Array.from(
+    new Set((sessionIds || []).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0))
+  );
+  const ep = Number(examPeriodId);
+  if (!sids.length || !Number.isFinite(ep) || ep <= 0) return { assigned: 0 };
+
+  const qf = (text, params = []) => (client ? client.query(text, params) : q(text, params));
+
+  const ex = await qf(`SELECT id FROM public.examiners ORDER BY id ASC;`);
+  const examinerIds = (ex.rows || []).map((r) => Number(r.id)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!examinerIds.length) return { assigned: 0 };
+
+  const existing = await qf(
+    `SELECT session_id FROM public.examiner_assignments WHERE session_id = ANY($1::int[]);`,
+    [sids]
+  );
+  const assignedSet = new Set((existing.rows || []).map((r) => Number(r.session_id)));
+  const toAssign = sids.filter((sid) => !assignedSet.has(sid)).sort((a, b) => a - b);
+  if (!toAssign.length) return { assigned: 0 };
+
+  const order = [...examinerIds];
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+
+  let assigned = 0;
+  for (let i = 0; i < toAssign.length; i++) {
+    const sid = toAssign[i];
+    const pick = order[i % order.length];
+    const ins = await qf(
+      `INSERT INTO public.examiner_assignments (session_id, examiner_id, assigned_at_utc_ms)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (session_id) DO NOTHING;`,
+      [sid, pick, Date.now()]
+    );
+    assigned += Number(ins?.rowCount || 0);
+  }
+  return { assigned };
+}
+
+// Single-candidate strategy:
+// choose among least-loaded examiners, randomizing ties.
+async function assignSingleToLeastLoadedRandomTie({ sessionId, examPeriodId, client = null }) {
+  const sid = Number(sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) return { assigned: 0 };
+
+  const qf = (text, params = []) => (client ? client.query(text, params) : q(text, params));
+
+  const already = await qf(`SELECT 1 FROM public.examiner_assignments WHERE session_id = $1 LIMIT 1;`, [sid]);
+  if (already.rows?.length) return { assigned: 0 };
+
+  const countsRes = await qf(
+    `SELECT e.id AS examiner_id, COALESCE(c.cnt, 0) AS cnt
+     FROM public.examiners e
+     LEFT JOIN (
+       SELECT a.examiner_id, COUNT(*)::int AS cnt
+       FROM public.examiner_assignments a
+       GROUP BY a.examiner_id
+     ) c ON c.examiner_id = e.id
+     ORDER BY e.id ASC;`,
+    []
+  );
+  const rows = countsRes.rows || [];
+  if (!rows.length) return { assigned: 0 };
+
+  let min = Number(rows[0].cnt || 0);
+  for (const r of rows) {
+    const c = Number(r.cnt || 0);
+    if (c < min) min = c;
+  }
+  const candidates = rows
+    .filter((r) => Number(r.cnt || 0) === min)
+    .map((r) => Number(r.examiner_id))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  if (!candidates.length) return { assigned: 0 };
+
+  const pick = candidates[Math.floor(Math.random() * candidates.length)];
+  const ins = await qf(
+    `INSERT INTO public.examiner_assignments (session_id, examiner_id, assigned_at_utc_ms)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (session_id) DO NOTHING;`,
+    [sid, pick, Date.now()]
+  );
+  return { assigned: Number(ins?.rowCount || 0) };
+}
+
 async function autoAssignUnassignedSessions() {
   const periods = await q(
     `SELECT DISTINCT exam_period_id
@@ -410,6 +500,30 @@ async function autoAssignUnassignedSessions() {
   }
 }
 
+async function ensureSessionAssignedExaminer({ sessionId, examPeriodId } = {}) {
+  const sid = Number(sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) return "";
+
+  let ep = Number(examPeriodId);
+  if (!Number.isFinite(ep) || ep <= 0) {
+    const s = await q1(`SELECT exam_period_id FROM public.sessions WHERE id = $1 LIMIT 1;`, [sid]);
+    ep = Number(s?.exam_period_id);
+  }
+  if (!Number.isFinite(ep) || ep <= 0) return "";
+
+  await assignSingleToLeastLoadedRandomTie({ sessionId: sid, examPeriodId: ep });
+
+  const row = await q1(
+    `SELECT e.username
+     FROM public.examiner_assignments a
+     JOIN public.examiners e ON e.id = a.examiner_id
+     WHERE a.session_id = $1
+     LIMIT 1;`,
+    [sid]
+  );
+  return String(row?.username || "");
+}
+
 async function createSession({ candidateName }) {
   const token = makeToken(10);
   const name = String(candidateName || "Candidate").trim() || "Candidate";
@@ -422,7 +536,7 @@ async function createSession({ candidateName }) {
   return { token, sessionId: r.rows[0].id };
 }
 
-async function importCandidatesAndCreateSessions({ rows, examPeriodId }) {
+async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even" }) {
   const ep = Number(examPeriodId) || 1;
   if (!Number.isFinite(ep) || ep <= 0) throw new Error("Invalid exam period");
 
@@ -468,7 +582,7 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId }) {
          LIMIT 1;`,
         [ep, c.id]
       );
-      if (existing.rows.length) {
+      if (existing.rows.length && String(assignmentStrategy || "") !== "single_least_random") {
         created.push({
           sessionId: existing.rows[0].id,
           token: existing.rows[0].token,
@@ -515,11 +629,18 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId }) {
       }
     }
 
-    await assignSessionsToLeastLoadedExaminers({
-      sessionIds: created.map((x) => Number(x.sessionId)),
-      examPeriodId: ep,
-      client,
-    });
+    const sidsForAssign = created.map((x) => Number(x.sessionId));
+    if (String(assignmentStrategy || "") === "single_least_random") {
+      for (const sid of sidsForAssign) {
+        await assignSingleToLeastLoadedRandomTie({ sessionId: sid, examPeriodId: ep, client });
+      }
+    } else {
+      await assignSessionsBalancedAcrossExaminers({
+        sessionIds: sidsForAssign,
+        examPeriodId: ep,
+        client,
+      });
+    }
 
     const sidList = created
       .map((x) => Number(x.sessionId))
@@ -1173,6 +1294,7 @@ module.exports = {
   deleteExamPeriod,
   verifyAdmin,
   verifyExaminer,
+  ensureSessionAssignedExaminer,
   getQuestionGrades,
   deleteCandidateBySessionId,
   deleteAllCoreData,

@@ -278,6 +278,11 @@ async function presencePing(_token, _status) {
   return true;
 }
 
+async function ensureSessionAssignedExaminer(_opts = {}) {
+  // SQLite fallback does not persist examiner assignments.
+  return "";
+}
+
 function normalizeAnswers(answers) {
   if (!answers || typeof answers !== "object") return {};
   return answers;
@@ -709,6 +714,7 @@ module.exports = {
   listCandidates,
   listCandidatesForExaminer,
   setExaminerGrades,
+  ensureSessionAssignedExaminer,
   presencePing,
   getConfig,
   verifyAdmin,

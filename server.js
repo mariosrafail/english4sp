@@ -391,7 +391,11 @@ app.post("/api/admin/import-excel", upload.single("file"), async (req, res) => {
   }
   if (!rows.length) return res.status(400).json({ error: "No valid rows. Email is required." });
 
-  const created = await DB.importCandidatesAndCreateSessions({ rows, examPeriodId });
+  const created = await DB.importCandidatesAndCreateSessions({
+    rows,
+    examPeriodId,
+    assignmentStrategy: "batch_even",
+  });
 
   const base = getPublicBase(req);
 
@@ -542,10 +546,22 @@ app.post("/api/admin/create-candidate", async (req, res) => {
   const created = await DB.importCandidatesAndCreateSessions({
     rows: [{ name, email, country }],
     examPeriodId,
+    assignmentStrategy: "single_least_random",
   });
 
   const s = Array.isArray(created?.sessions) ? created.sessions[0] : null;
   if (!s) return res.status(500).json({ error: "Failed to create candidate session" });
+
+  // Guarantee assignment to the least-loaded examiner (if DB adapter supports assignments).
+  try {
+    if (typeof DB.ensureSessionAssignedExaminer === "function") {
+      const ensured = await DB.ensureSessionAssignedExaminer({
+        sessionId: Number(s.sessionId),
+        examPeriodId: Number(s.examPeriodId || examPeriodId),
+      });
+      if (String(ensured || "").trim()) s.assignedExaminer = String(ensured).trim();
+    }
+  } catch {}
 
   const base = getPublicBase(req);
   const url = `${base}/exam.html?token=${s.token}&sid=${s.sessionId}`;
