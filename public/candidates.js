@@ -1,4 +1,4 @@
-import { apiGet, qs } from "./app.js";
+import { apiGet, qs, uiAlert, uiConfirm } from "./app.js";
 
 const elQ = qs("#q");
 const elClear = qs("#clear");
@@ -440,7 +440,7 @@ elBtnExportSelected?.addEventListener("click", async () => {
     showCandidatesBusy("Processing. Don't close this page. Please wait...");
     await exportRows(rows, "selected", includeDetailed);
   } catch (e) {
-    alert(e?.message || String(e));
+    await uiAlert(e?.message || String(e), { title: "Export Error" });
   } finally {
     hideCandidatesBusy();
     elBtnExportSelected.disabled = false;
@@ -546,7 +546,7 @@ elTbody.addEventListener("click", async (ev) => {
       }
       openReviewModal();
     } catch (e) {
-      alert(e?.message || String(e));
+      await uiAlert(e?.message || String(e), { title: "Load Error" });
     } finally {
       openBtn.disabled = false;
     }
@@ -558,7 +558,10 @@ elTbody.addEventListener("click", async (ev) => {
   const sid = Number(btn.getAttribute("data-sid"));
   if (!Number.isFinite(sid) || sid <= 0) return;
 
-  const ok = confirm("Delete this candidate completely? This will remove them from candidates, sessions, and question_grades.");
+  const ok = await uiConfirm(
+    "Delete this candidate completely? This will remove them from candidates, sessions, and question_grades.",
+    { title: "Delete Candidate" }
+  );
   if (!ok) return;
 
   btn.disabled = true;
@@ -580,7 +583,7 @@ elTbody.addEventListener("click", async (ev) => {
     rebuildExamPeriodOptions();
     applyFilters(false);
   } catch (e) {
-    alert(e?.message || String(e));
+    await uiAlert(e?.message || String(e), { title: "Delete Error" });
     btn.disabled = false;
   }
 });

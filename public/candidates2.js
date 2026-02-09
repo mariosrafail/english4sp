@@ -1,4 +1,4 @@
-import { apiGet, apiPost, qs, qsa } from "./app.js";
+import { apiGet, apiPost, qs, qsa, uiAlert, uiConfirm } from "./app.js";
 
 const elQ = qs("#q");
 const elClear = qs("#clear");
@@ -263,7 +263,7 @@ if (elExportXls) {
       elExportXls.disabled = true;
       await exportFilteredToXls();
     } catch (err) {
-      alert(String(err?.message || err));
+      await uiAlert(String(err?.message || err), { title: "Export Error" });
     } finally {
       elExportXls.disabled = false;
     }
@@ -272,7 +272,7 @@ if (elExportXls) {
 
 if (elSwitchExaminer) {
   elSwitchExaminer.addEventListener("click", async () => {
-    const ok = confirm("Log out and sign in as another examiner?");
+    const ok = await uiConfirm("Log out and sign in as another examiner?", { title: "Switch Examiner" });
     if (!ok) return;
 
     try {
@@ -315,7 +315,7 @@ elTbody.addEventListener("click", async (ev) => {
     btn.classList.add("saved");
   } catch (e) {
     btn.classList.add("error");
-    alert(String(e.message || e));
+    await uiAlert(String(e.message || e), { title: "Save Error" });
   } finally {
     btn.disabled = false;
   }

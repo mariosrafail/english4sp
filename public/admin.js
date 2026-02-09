@@ -1,4 +1,4 @@
-import { apiGet, apiPost, qs, escapeHtml } from "/app.js";
+import { apiGet, apiPost, qs, escapeHtml, uiConfirm, uiPrompt } from "/app.js";
 
 const elOut = qs("#out");
 
@@ -245,7 +245,7 @@ elCreate.addEventListener("click", async () => {
     elCreate.disabled = true;
     elCfgOut.innerHTML = "";
 
-    const nameRaw = prompt("Exam period name", "");
+    const nameRaw = await uiPrompt("Enter exam period name.", "", { title: "Create Exam Period" });
     if (nameRaw === null) return;
 
     const name = nameRaw && String(nameRaw).trim() ? String(nameRaw).trim() : undefined;
@@ -271,7 +271,7 @@ elDelete.addEventListener("click", async () => {
     const id = getSelectedExamPeriodId();
     const p = getPeriodById(id);
     const label = String(p?.name || "").trim() || `Exam period ${id}`;
-    const ok = confirm(`Delete "${label}" (ID ${id}) and all its sessions?`);
+    const ok = await uiConfirm(`Delete "${label}" (ID ${id}) and all its sessions?`, { title: "Delete Exam Period" });
     if (!ok) return;
 
     const r = await fetch(`/api/admin/exam-periods/${encodeURIComponent(id)}`, {
@@ -466,8 +466,9 @@ loadExamPeriods(1).catch((e) => {
 if (elDeleteAll) {
   elDeleteAll.addEventListener("click", async () => {
     try {
-      const ok = confirm(
-        "Are you sure? This will permanently delete ALL data from question_grades, sessions, and candidates."
+      const ok = await uiConfirm(
+        "Are you sure? This will permanently delete ALL data from question_grades, sessions, and candidates.",
+        { title: "Delete All Data" }
       );
       if (!ok) return;
 

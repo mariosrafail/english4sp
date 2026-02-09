@@ -395,21 +395,123 @@ app.post("/api/admin/import-excel", upload.single("file"), async (req, res) => {
 
   const base = getPublicBase(req);
 
-  const exportRows = (created.sessions || []).map((s) => ({
-    Name: s.name || "",
-    Email: s.email,
-    "Country code": s.country || "",
-    "Exam period id": s.examPeriodId,
-    "Assigned examiner": s.assignedExaminer || "",
-    "Session id": s.sessionId,
-    Token: s.token,
-    Link: `${base}/exam.html?token=${s.token}&sid=${s.sessionId}`,
-  }));
+  function softWrapText(text, maxCharsPerLine = 75) {
+    const src = String(text || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+    const outLines = [];
+    for (const rawLine of src.split("\n")) {
+      const line = String(rawLine || "");
+      if (line.length <= maxCharsPerLine) {
+        outLines.push(line);
+        continue;
+      }
+      const words = line.split(/\s+/).filter(Boolean);
+      if (!words.length) {
+        outLines.push("");
+        continue;
+      }
+      let cur = "";
+      for (const w of words) {
+        if (!cur) {
+          cur = w;
+          continue;
+        }
+        if ((cur + " " + w).length <= maxCharsPerLine) cur += " " + w;
+        else {
+          outLines.push(cur);
+          cur = w;
+        }
+      }
+      if (cur) outLines.push(cur);
+    }
+    return outLines.join("\r\n");
+  }
 
-  const outWb = XLSX.utils.book_new();
-  const outWs = XLSX.utils.json_to_sheet(exportRows);
-  XLSX.utils.book_append_sheet(outWb, outWs, "sessions");
-  const buf = XLSX.write(outWb, { type: "buffer", bookType: "xlsx" });
+  const exportRows = (created.sessions || []).map((s) => {
+    const url = `${base}/exam.html?token=${s.token}&sid=${s.sessionId}`;
+    return {
+      name: String(s.name || ""),
+      email: String(s.email || ""),
+      countryCode: String(s.country || ""),
+      examPeriodId: Number(s.examPeriodId || ""),
+      assignedExaminer: String(s.assignedExaminer || ""),
+      sessionId: Number(s.sessionId || ""),
+      token: String(s.token || ""),
+      link: softWrapText(url, 85),
+      rawLink: url,
+    };
+  });
+
+  const outWb = new ExcelJS.Workbook();
+  const outWs = outWb.addWorksheet("sessions");
+  outWs.columns = [
+    { header: "Name", key: "name", width: 18 },
+    { header: "Email", key: "email", width: 24 },
+    { header: "Country code", key: "countryCode", width: 14 },
+    { header: "Exam period id", key: "examPeriodId", width: 14 },
+    { header: "Assigned examiner", key: "assignedExaminer", width: 18 },
+    { header: "Session id", key: "sessionId", width: 12 },
+    { header: "Token", key: "token", width: 22 },
+    { header: "Link", key: "link", width: 200 },
+  ];
+  outWs.getRow(1).font = { bold: true };
+  outWs.getColumn(8).alignment = { wrapText: true, vertical: "top" };
+
+  for (const r of exportRows) {
+    const row = outWs.addRow({
+      name: r.name,
+      email: r.email,
+      countryCode: r.countryCode,
+      examPeriodId: r.examPeriodId,
+      assignedExaminer: r.assignedExaminer,
+      sessionId: r.sessionId,
+      token: r.token,
+      link: r.link,
+    });
+    const linkCell = row.getCell(8);
+    linkCell.value = { text: r.link, hyperlink: r.rawLink };
+    linkCell.alignment = { wrapText: true, vertical: "top" };
+    linkCell.font = { color: { argb: "FF0563C1" }, underline: true };
+  }
+
+  const wrapKeys = new Set(["link", "name", "email", "assignedExaminer"]);
+  const minWidthByKey = {
+    token: 22,
+    link: 100,
+  };
+  for (let c = 1; c <= outWs.columnCount; c++) {
+    const col = outWs.getColumn(c);
+    const key = String(col.key || "");
+    let maxLen = String(col.header || "").length;
+    col.eachCell({ includeEmpty: true }, (cell) => {
+      const txt = String(cell.text ?? cell.value ?? "");
+      for (const ln of txt.split(/\r?\n/)) maxLen = Math.max(maxLen, ln.length);
+    });
+    const width = wrapKeys.has(key)
+      ? Math.min(95, Math.max(14, Math.ceil(maxLen * 0.95)))
+      : Math.min(36, Math.max(10, Math.ceil(maxLen * 1.1)));
+    const minW = Number(minWidthByKey[key] || 0);
+    col.width = minW > 0 ? Math.max(width, minW) : width;
+  }
+
+  for (let r = 2; r <= outWs.rowCount; r++) {
+    const row = outWs.getRow(r);
+    let neededLines = 1;
+    for (let c = 1; c <= outWs.columnCount; c++) {
+      const col = outWs.getColumn(c);
+      const key = String(col.key || "");
+      if (!wrapKeys.has(key)) continue;
+      const txt = String(row.getCell(c).text ?? row.getCell(c).value ?? "");
+      const colChars = Math.max(12, Math.floor(Number(col.width || 20)));
+      const lines = txt
+        .split(/\r?\n/)
+        .reduce((sum, ln) => sum + Math.max(1, Math.ceil(String(ln).length / colChars)), 0);
+      neededLines = Math.max(neededLines, lines);
+    }
+    row.height = Math.min(220, Math.max(20, neededLines * 15));
+  }
+
+  const out = await outWb.xlsx.writeBuffer();
+  const buf = Buffer.from(out);
 
   res.setHeader(
     "Content-Type",
