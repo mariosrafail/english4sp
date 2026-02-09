@@ -431,7 +431,8 @@ async function assignSessionsBalancedAcrossExaminers({ sessionIds, examPeriodId,
 // choose among least-loaded examiners, randomizing ties.
 async function assignSingleToLeastLoadedRandomTie({ sessionId, examPeriodId, client = null }) {
   const sid = Number(sessionId);
-  if (!Number.isFinite(sid) || sid <= 0) return { assigned: 0 };
+  const ep = Number(examPeriodId);
+  if (!Number.isFinite(sid) || sid <= 0 || !Number.isFinite(ep) || ep <= 0) return { assigned: 0 };
 
   const qf = (text, params = []) => (client ? client.query(text, params) : q(text, params));
 
@@ -444,10 +445,12 @@ async function assignSingleToLeastLoadedRandomTie({ sessionId, examPeriodId, cli
      LEFT JOIN (
        SELECT a.examiner_id, COUNT(*)::int AS cnt
        FROM public.examiner_assignments a
+       JOIN public.sessions s ON s.id = a.session_id
+       WHERE s.exam_period_id = $1
        GROUP BY a.examiner_id
      ) c ON c.examiner_id = e.id
      ORDER BY e.id ASC;`,
-    []
+    [ep]
   );
   const rows = countsRes.rows || [];
   if (!rows.length) return { assigned: 0 };
