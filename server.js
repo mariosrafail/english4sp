@@ -421,6 +421,68 @@ app.post("/api/admin/speaking-slots/auto-generate", async (req, res) => {
   }
 });
 
+app.post("/api/admin/speaking-slots/recreate-zoom-links", async (req, res) => {
+  try {
+    await ensureInit();
+    const a = await adminAuth(req, res);
+    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    if (!DB.listSpeakingSlots || !DB.updateSpeakingSlot) {
+      return res.status(501).json({ error: "Not supported on this database adapter" });
+    }
+    if (!hasZoomConfig()) {
+      return res.status(400).json({
+        error: "Zoom requires configuration. Set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET (and optionally ZOOM_USER_ID, ZOOM_TIMEZONE).",
+      });
+    }
+
+    const examPeriodIdRaw = Number(req.body?.examPeriodId);
+    const examPeriodId = Number.isFinite(examPeriodIdRaw) && examPeriodIdRaw > 0 ? examPeriodIdRaw : null;
+    const slots = await DB.listSpeakingSlots({
+      ...(examPeriodId ? { examPeriodId } : {}),
+      limit: 50000,
+    });
+
+    let updated = 0;
+    let failed = 0;
+    const errors = [];
+    for (const slot of Array.isArray(slots) ? slots : []) {
+      if (String(slot?.videoProvider || "").toLowerCase() !== "zoom") continue;
+      const sid = Number(slot?.id || 0);
+      if (!Number.isFinite(sid) || sid <= 0) continue;
+
+      const oldMeetingId = String(slot?.meetingId || "").trim();
+      try {
+        const z = await createZoomMeetingForSlot(slot);
+        const out = await DB.updateSpeakingSlot({
+          id: sid,
+          meetingId: z.meetingId,
+          joinUrl: z.joinUrl,
+          startUrl: z.startUrl,
+          meetingMetadata: z.metadata,
+        });
+        if (out) updated += 1;
+        if (oldMeetingId && oldMeetingId !== String(z.meetingId || "").trim()) {
+          try { await deleteZoomMeetingById(oldMeetingId); } catch {}
+        }
+      } catch (e) {
+        failed += 1;
+        errors.push({ slotId: sid, error: String(e?.message || "recreate_failed") });
+      }
+    }
+
+    return res.json({
+      ok: true,
+      examPeriodId,
+      scanned: Array.isArray(slots) ? slots.length : 0,
+      updated,
+      failed,
+      errors: errors.slice(0, 200),
+    });
+  } catch (e) {
+    return res.status(400).json({ error: e?.message || "recreate_zoom_links_failed" });
+  }
+});
+
 app.put("/api/admin/speaking-slots/:id", async (req, res) => {
   try {
     await ensureInit();

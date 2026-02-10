@@ -3,6 +3,7 @@ import { apiGet, qs, escapeHtml } from "/app.js";
 const elExamPeriod = qs("#examPeriod");
 const elExaminer = qs("#examinerFilter");
 const elReload = qs("#btnReload");
+const elRecreateZoom = qs("#btnRecreateZoom");
 const elQ = qs("#q");
 const elClear = qs("#clear");
 const elFrom = qs("#fromDT");
@@ -161,6 +162,23 @@ async function autoGenerate(examPeriodId) {
   return r.json();
 }
 
+async function recreateZoomLinks(examPeriodId) {
+  const body = {};
+  const ep = Number(examPeriodId || 0);
+  if (Number.isFinite(ep) && ep > 0) body.examPeriodId = ep;
+  const r = await fetch("/api/admin/speaking-slots/recreate-zoom-links", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    throw new Error(j.error || `HTTP ${r.status}`);
+  }
+  return r.json();
+}
+
 async function loadRows() {
   const ep = selectedExamPeriodId();
   if (elOut) elOut.textContent = "Loading...";
@@ -205,6 +223,25 @@ async function init() {
 }
 
 if (elReload) elReload.addEventListener("click", () => { loadRows().catch((e) => { if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`; }); });
+if (elRecreateZoom) {
+  elRecreateZoom.addEventListener("click", async () => {
+    try {
+      elRecreateZoom.disabled = true;
+      if (elOut) elOut.textContent = "Recreating Zoom links...";
+      const ep = selectedExamPeriodId();
+      const out = await recreateZoomLinks(ep);
+      const done = Number(out?.updated || 0);
+      const failed = Number(out?.failed || 0);
+      const scope = Number(out?.examPeriodId || 0) > 0 ? `exam period ${Number(out.examPeriodId)}` : "all exam periods";
+      if (elOut) elOut.innerHTML = `<span class="ok">Recreated ${done} Zoom link(s) for ${escapeHtml(scope)}.</span>${failed > 0 ? ` <span class="bad">${failed} failed.</span>` : ""}`;
+      await loadRows();
+    } catch (e) {
+      if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
+    } finally {
+      elRecreateZoom.disabled = false;
+    }
+  });
+}
 if (elExamPeriod) elExamPeriod.addEventListener("change", () => { loadRows().catch((e) => { if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`; }); });
 if (elExaminer) elExaminer.addEventListener("change", () => { _page = 1; applyFilters(); });
 if (elFrom) elFrom.addEventListener("change", () => { _page = 1; applyFilters(); });
