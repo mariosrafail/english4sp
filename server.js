@@ -794,8 +794,8 @@ async function createZoomMeetingForSlot(slot) {
     settings: {
       host_video: true,
       participant_video: true,
-      waiting_room: true,
-      join_before_host: false,
+      waiting_room: false,
+      join_before_host: true,
     },
   };
 
@@ -838,6 +838,10 @@ async function updateZoomMeetingForSlot(slot) {
     start_time: new Date(start).toISOString(),
     duration: zoomDurationMinutes(slot),
     timezone: String(process.env.ZOOM_TIMEZONE || "Europe/Athens"),
+    settings: {
+      waiting_room: false,
+      join_before_host: true,
+    },
   };
 
   const r = await fetch(`https://api.zoom.us/v2/meetings/${encodeURIComponent(meetingId)}`, {
