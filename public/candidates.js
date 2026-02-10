@@ -10,6 +10,7 @@ const elExaminerFilter = qs("#examinerFilter");
 const elBtnSelectVisible = qs("#btnSelectVisible");
 const elBtnClearSelection = qs("#btnClearSelection");
 const elBtnExportSelected = qs("#btnExportSelected");
+const elBtnDeleteSelected = qs("#btnDeleteSelected");
 const elChkAll = qs("#chkAll");
 
 const elTbody = qs("#tbody");
@@ -191,6 +192,7 @@ function getCurrentSlice() {
 
 function updateSelectionKpi() {
   if (elKpiSelected) elKpiSelected.textContent = String(selectedIds.size);
+  if (elBtnDeleteSelected) elBtnDeleteSelected.style.display = selectedIds.size > 0 ? "inline-flex" : "none";
 }
 
 function updateHeaderCheckbox() {
@@ -444,6 +446,44 @@ elBtnExportSelected?.addEventListener("click", async () => {
   } finally {
     hideCandidatesBusy();
     elBtnExportSelected.disabled = false;
+  }
+});
+
+elBtnDeleteSelected?.addEventListener("click", async () => {
+  const ids = Array.from(selectedIds).map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0);
+  if (!ids.length) return;
+  const ok = await uiConfirm(
+    `Delete ${ids.length} selected session(s)? This also removes speaking slots/links and grades.`,
+    { title: "Delete Selected Sessions" }
+  );
+  if (!ok) return;
+
+  elBtnDeleteSelected.disabled = true;
+  try {
+    showCandidatesBusy("Deleting selected sessions. Please wait...");
+    const r = await fetch("/api/admin/candidates/bulk-delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ sessionIds: ids }),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.status === 401) {
+      location.href = "/index.html";
+      return;
+    }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+
+    selectedIds.clear();
+    const fresh = await apiGet("/api/admin/candidates");
+    allRows = Array.isArray(fresh) ? fresh : [];
+    rebuildExamPeriodOptions();
+    applyFilters(false);
+  } catch (e) {
+    await uiAlert(e?.message || String(e), { title: "Delete Error" });
+  } finally {
+    hideCandidatesBusy();
+    elBtnDeleteSelected.disabled = false;
   }
 });
 

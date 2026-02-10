@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Speaking Scheduling</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <link rel="icon" href="/favicon.ico"/>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div style="margin-bottom:10px">
+        <a class="badge" href="/admin.html" aria-label="Back to Admin" title="Back to Admin" style="display:inline-flex; align-items:center; justify-content:center; width:46px; height:42px; padding:0;">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:22px; height:22px;">
+            <path d="M14.7 5.3a1 1 0 0 1 0 1.4L10.41 11H20a1 1 0 1 1 0 2h-9.59l4.3 4.3a1 1 0 1 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.41 0Z" fill="currentColor"/>
+          </svg>
+        </a>
+      </div>
+
+      <h1>Speaking Scheduling</h1>
+      <div class="toolbar">
+        <div class="controlsRow" style="justify-content:flex-start;">
+          <div class="rightControls" style="width:100%; justify-content:flex-start;">
+            <select id="examPeriod" class="input mono" style="max-width:260px;">
+              <option value="">All exam periods</option>
+            </select>
+            <select id="examinerFilter" class="input mono" style="max-width:220px;">
+              <option value="">All examiners</option>
+            </select>
+            <button id="btnReload" type="button" style="width:auto; min-width:120px;">Reload</button>
+          </div>
+        </div>
+
+        <div class="searchWrap" style="width:100%">
+          <input id="q" placeholder="Search candidate / token..." />
+          <button id="clear" type="button">Clear</button>
+        </div>
+
+        <div class="controlsRow" style="justify-content:flex-start;">
+          <div class="rightControls" style="width:100%; justify-content:flex-start;">
+            <input id="fromDT" class="input mono" type="datetime-local" step="60" style="max-width:240px;" />
+            <input id="toDT" class="input mono" type="datetime-local" step="60" style="max-width:240px;" />
+            <select id="pageSize" class="input mono" style="max-width:120px;">
+              <option value="10">10</option>
+              <option value="20" selected>20</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <div id="out" class="help" style="margin:8px 0 10px 0;"></div>
+
+      <div style="overflow:auto;">
+        <table class="table mono" id="tbl">
+          <thead>
+            <tr>
+              <th>Start (edit)</th>
+              <th>Candidate</th>
+              <th>Examiner</th>
+              <th>Link</th>
+              <th>Zoom URL</th>
+            </tr>
+          </thead>
+          <tbody id="tbody">
+            <tr><td colspan="5" class="muted">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <div class="badge">Page <span class="mono" id="pageNum">1</span> / <span class="mono" id="pageMax">1</span></div>
+        <button id="prev" type="button">Prev</button>
+        <button id="next" type="button">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/speaking-scheduling.js"></script>
+</body>
+</html>

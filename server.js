@@ -1,4 +1,4 @@
-// server.js
+﻿// server.js
 require('dotenv').config();
 
 const path = require("path");
@@ -24,7 +24,7 @@ const {
 } = require("./src/examiner_session");
 const { getTestPayloadFull } = require("./src/test_config");
 
-// Ίδια επιλογή DB όπως τώρα: αν υπάρχει DATABASE_URL, πάει σε Postgres αλλιώς SQLite
+// ÎŠÎ´Î¹Î± ÎµÏ€Î¹Î»Î¿Î³Î® DB ÏŒÏ€Ï‰Ï‚ Ï„ÏŽÏÎ±: Î±Î½ Ï…Ï€Î¬ÏÏ‡ÎµÎ¹ DATABASE_URL, Ï€Î¬ÎµÎ¹ ÏƒÎµ Postgres Î±Î»Î»Î¹ÏŽÏ‚ SQLite
 const hasPg = !!(
   process.env.DATABASE_URL ||
   process.env.NETLIFY_DATABASE_URL_UNPOOLED ||
@@ -179,12 +179,14 @@ async function examinerAuth(req, res) {
 const app = express();
 app.use(express.json({ limit: "2mb" }));
 app.use(cors({ origin: process.env.CORS_ORIGIN || "*" }));
+const SPEAKING_DURATION_MINUTES = 60;
+const ATHENS_TZ = "Europe/Athens";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Guard admin UI file (server-side). API routes are guarded per-endpoint below.
 app.use(async (req, res, next) => {
-  if (req.path !== "/admin.html") return next();
+  if (req.path !== "/admin.html" && req.path !== "/speaking-scheduling.html") return next();
   const a = await adminAuth(req, res);
   if (a.ok) return next();
   return res.redirect("/index.html");
@@ -311,6 +313,195 @@ app.delete("/api/admin/exam-periods/:id", async (req, res) => {
   res.json(out);
 });
 
+app.get("/api/admin/examiners", async (req, res) => {
+  await ensureInit();
+  const a = await adminAuth(req, res);
+  if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+  if (!DB.listExaminers) return res.json([]);
+  res.json(await DB.listExaminers());
+});
+
+app.get("/api/admin/speaking-slots", async (req, res) => {
+  await ensureInit();
+  const a = await adminAuth(req, res);
+  if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+  if (!DB.listSpeakingSlots) return res.json([]);
+
+  const examPeriodId = req.query?.examPeriodId;
+  const fromUtcMs = req.query?.fromUtcMs;
+  const toUtcMs = req.query?.toUtcMs;
+  const limit = req.query?.limit;
+  const examinerUsername = req.query?.examinerUsername;
+
+  const out = await DB.listSpeakingSlots({
+    examPeriodId: examPeriodId === undefined ? undefined : Number(examPeriodId),
+    fromUtcMs: fromUtcMs === undefined ? undefined : Number(fromUtcMs),
+    toUtcMs: toUtcMs === undefined ? undefined : Number(toUtcMs),
+    limit: limit === undefined ? undefined : Number(limit),
+    examinerUsername: examinerUsername === undefined ? undefined : String(examinerUsername || ""),
+  });
+  const base = getPublicBase(req);
+  const rows = (Array.isArray(out) ? out : []).map((r) => {
+    const tok = String(r?.sessionToken || "").trim();
+    return {
+      ...r,
+      speakingUrl: tok ? `${base}/speaking.html?token=${encodeURIComponent(tok)}` : "",
+    };
+  });
+  res.json(rows);
+});
+
+app.post("/api/admin/speaking-slots", async (req, res) => {
+  try {
+    await ensureInit();
+    const a = await adminAuth(req, res);
+    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    if (!DB.createSpeakingSlot) return res.status(501).json({ error: "Not supported on this database adapter" });
+
+    const rawPayload = req.body && typeof req.body === "object" ? req.body : {};
+    const payload = { ...rawPayload, durationMinutes: SPEAKING_DURATION_MINUTES, videoProvider: "zoom" };
+    if (!hasZoomConfig()) {
+      return res.status(400).json({
+        error: "Zoom requires configuration. Set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET (and optionally ZOOM_USER_ID, ZOOM_TIMEZONE).",
+      });
+    }
+    let out = await DB.createSpeakingSlot(payload);
+
+    try {
+      const z = await createZoomMeetingForSlot(out);
+      const updated = await DB.updateSpeakingSlot({
+        id: Number(out.id),
+        meetingId: z.meetingId,
+        joinUrl: z.joinUrl,
+        startUrl: z.startUrl,
+        meetingMetadata: z.metadata,
+      });
+      if (updated) out = updated;
+    } catch (zerr) {
+      // Strict behavior: do not keep fallback link when provider is Zoom.
+      // If Zoom meeting creation fails, remove the just-created slot and return an error.
+      try {
+        if (DB.deleteSpeakingSlot && Number(out?.id) > 0) {
+          await DB.deleteSpeakingSlot(Number(out.id));
+        }
+      } catch {}
+      return res.status(502).json({
+        error: `Zoom meeting creation failed: ${String(zerr?.message || "unknown error")}`,
+      });
+    }
+
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ error: e?.message || "create_speaking_slot_failed" });
+  }
+});
+
+app.post("/api/admin/speaking-slots/auto-generate", async (req, res) => {
+  try {
+    await ensureInit();
+    const a = await adminAuth(req, res);
+    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    if (!DB.listSessionsMissingSpeakingSlot || !DB.createSpeakingSlot) {
+      return res.status(501).json({ error: "Not supported on this database adapter" });
+    }
+    if (!hasZoomConfig()) {
+      return res.status(400).json({
+        error: "Zoom requires configuration. Set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET (and optionally ZOOM_USER_ID, ZOOM_TIMEZONE).",
+      });
+    }
+
+    const examPeriodId = Number(req.body?.examPeriodId);
+    if (!Number.isFinite(examPeriodId) || examPeriodId <= 0) {
+      return res.status(400).json({ error: "Invalid exam period id" });
+    }
+    const out = await autoGenerateSpeakingSlotsForExamPeriod(examPeriodId, { maxErrors: 200 });
+    return res.json(out);
+  } catch (e) {
+    return res.status(400).json({ error: e?.message || "auto_generate_speaking_slots_failed" });
+  }
+});
+
+app.put("/api/admin/speaking-slots/:id", async (req, res) => {
+  try {
+    await ensureInit();
+    const a = await adminAuth(req, res);
+    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    if (!DB.updateSpeakingSlot) return res.status(501).json({ error: "Not supported on this database adapter" });
+
+    const payload = req.body && typeof req.body === "object" ? req.body : {};
+    const prevSlot = DB.getSpeakingSlotById ? await DB.getSpeakingSlotById(req.params.id) : null;
+    const hasStart = Object.prototype.hasOwnProperty.call(payload, "startUtcMs");
+    let forcedStartUtcMs = null;
+    let forcedEndUtcMs = null;
+    if (hasStart) {
+      const s = Number(payload.startUtcMs);
+      if (!Number.isFinite(s) || s <= 0) {
+        return res.status(400).json({ error: "Invalid start time" });
+      }
+      forcedStartUtcMs = s;
+      forcedEndUtcMs = s + (SPEAKING_DURATION_MINUTES * 60 * 1000);
+    }
+    let out = await DB.updateSpeakingSlot({
+      id: req.params.id,
+      ...payload,
+      ...(hasStart ? { startUtcMs: forcedStartUtcMs, endUtcMs: forcedEndUtcMs, durationMinutes: SPEAKING_DURATION_MINUTES } : {}),
+    });
+    if (!out) return res.status(404).json({ error: "Slot not found" });
+
+    // If this slot uses Zoom:
+    // - on time change: create a fresh meeting URL, then remove previous meeting
+    // - otherwise: keep existing meeting in sync via PATCH
+    if (String(out?.videoProvider || "").toLowerCase() === "zoom") {
+      if (hasStart) {
+        try {
+          const z = await createZoomMeetingForSlot(out);
+          const updated = await DB.updateSpeakingSlot({
+            id: Number(out.id),
+            meetingId: z.meetingId,
+            joinUrl: z.joinUrl,
+            startUrl: z.startUrl,
+            meetingMetadata: z.metadata,
+          });
+          if (updated) out = updated;
+
+          const oldMeetingId = String(prevSlot?.meetingId || "").trim();
+          const newMeetingId = String(out?.meetingId || "").trim();
+          if (oldMeetingId && oldMeetingId !== newMeetingId) {
+            try { await deleteZoomMeetingById(oldMeetingId); } catch {}
+          }
+        } catch (zerr) {
+          return res.status(502).json({
+            error: `Zoom meeting refresh failed: ${String(zerr?.message || "unknown error")}`,
+          });
+        }
+      } else if (String(out?.meetingId || "").trim()) {
+        try {
+          await updateZoomMeetingForSlot(out);
+        } catch {
+          // Non-fatal: keep local update even if Zoom sync fails.
+        }
+      }
+    }
+
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ error: e?.message || "update_speaking_slot_failed" });
+  }
+});
+
+app.delete("/api/admin/speaking-slots/:id", async (req, res) => {
+  try {
+    await ensureInit();
+    const a = await adminAuth(req, res);
+    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    if (!DB.deleteSpeakingSlot) return res.status(501).json({ error: "Not supported on this database adapter" });
+    const out = await DB.deleteSpeakingSlot(req.params.id);
+    res.json(out);
+  } catch (e) {
+    res.status(400).json({ error: e?.message || "delete_speaking_slot_failed" });
+  }
+});
+
 app.post("/api/admin/create-session", async (req, res) => {
   await ensureInit();
   const a = await adminAuth(req, res);
@@ -349,6 +540,334 @@ function getPublicBase(req) {
   const proto = req.headers["x-forwarded-proto"] || "http";
   const host = req.headers["x-forwarded-host"] || req.headers.host || "localhost";
   return `${proto}://${host}`.replace(/\/+$/, "");
+}
+
+function getTimeZoneParts(utcMs, timeZone) {
+  const dtf = new Intl.DateTimeFormat("en-GB", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = dtf.formatToParts(new Date(Number(utcMs) || Date.now()));
+  const map = {};
+  for (const p of parts) {
+    if (p.type !== "literal") map[p.type] = p.value;
+  }
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+  };
+}
+
+function getTimeZoneOffsetMs(utcMs, timeZone) {
+  const p = getTimeZoneParts(utcMs, timeZone);
+  const asUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUtc - Number(utcMs);
+}
+
+function zonedDateTimeToUtcMs({ year, month, day, hour, minute, second = 0 }, timeZone) {
+  const guessUtc = Date.UTC(year, month - 1, day, hour, minute, second);
+  const off1 = getTimeZoneOffsetMs(guessUtc, timeZone);
+  let out = guessUtc - off1;
+  const off2 = getTimeZoneOffsetMs(out, timeZone);
+  if (off2 !== off1) out = guessUtc - off2;
+  return out;
+}
+
+function daysInMonth(year, monthOneBased) {
+  return new Date(Date.UTC(year, monthOneBased, 0)).getUTCDate();
+}
+
+function randomIntInclusive(min, max) {
+  const lo = Math.ceil(Number(min));
+  const hi = Math.floor(Number(max));
+  return Math.floor(Math.random() * (hi - lo + 1)) + lo;
+}
+
+function buildRandomSpeakingStartUtcNextMonthAthens(usedStarts = new Set()) {
+  const nowParts = getTimeZoneParts(Date.now(), ATHENS_TZ);
+  let year = nowParts.year;
+  let month = nowParts.month + 1;
+  if (month > 12) {
+    month = 1;
+    year += 1;
+  }
+
+  const maxDays = daysInMonth(year, month);
+  for (let attempt = 0; attempt < 5000; attempt += 1) {
+    const day = randomIntInclusive(1, maxDays);
+    const hour = randomIntInclusive(8, 21);
+    const minute = [0, 15, 30, 45][randomIntInclusive(0, 3)];
+    const startUtcMs = zonedDateTimeToUtcMs(
+      { year, month, day, hour, minute, second: 0 },
+      ATHENS_TZ
+    );
+    if (!usedStarts.has(startUtcMs)) {
+      usedStarts.add(startUtcMs);
+      return startUtcMs;
+    }
+  }
+  return null;
+}
+
+async function autoGenerateSpeakingSlotsForExamPeriod(examPeriodId, { maxErrors = 200 } = {}) {
+  const ep = Number(examPeriodId);
+  if (!Number.isFinite(ep) || ep <= 0) throw new Error("Invalid exam period id");
+  if (!DB.listSessionsMissingSpeakingSlot || !DB.createSpeakingSlot) {
+    throw new Error("Not supported on this database adapter");
+  }
+  if (!hasZoomConfig()) {
+    throw new Error("Zoom is not configured");
+  }
+
+  const missing = await DB.listSessionsMissingSpeakingSlot(ep);
+  const existing = DB.listSpeakingSlots
+    ? await DB.listSpeakingSlots({ examPeriodId: ep, limit: 50000 })
+    : [];
+  const usedStarts = new Set(
+    (Array.isArray(existing) ? existing : [])
+      .map((x) => Number(x?.startUtcMs || 0))
+      .filter((x) => Number.isFinite(x) && x > 0)
+  );
+
+  let created = 0;
+  let failed = 0;
+  const errors = [];
+  for (const row of missing || []) {
+    const sessionId = Number(row?.sessionId || 0);
+    if (!Number.isFinite(sessionId) || sessionId <= 0) continue;
+    const startUtcMs = buildRandomSpeakingStartUtcNextMonthAthens(usedStarts);
+    if (!Number.isFinite(startUtcMs) || startUtcMs <= 0) {
+      failed += 1;
+      errors.push({ sessionId, error: "no_random_slot_available" });
+      continue;
+    }
+
+    let slot = null;
+    try {
+      slot = await DB.createSpeakingSlot({
+        examPeriodId: ep,
+        sessionId,
+        startUtcMs,
+        durationMinutes: SPEAKING_DURATION_MINUTES,
+        videoProvider: "zoom",
+      });
+
+      const z = await createZoomMeetingForSlot(slot);
+      const updated = await DB.updateSpeakingSlot({
+        id: Number(slot.id),
+        meetingId: z.meetingId,
+        joinUrl: z.joinUrl,
+        startUrl: z.startUrl,
+        meetingMetadata: z.metadata,
+      });
+      if (updated) slot = updated;
+      created += 1;
+    } catch (err) {
+      failed += 1;
+      errors.push({ sessionId, error: String(err?.message || "unknown_error") });
+      try {
+        if (slot?.id && DB.deleteSpeakingSlot) {
+          await DB.deleteSpeakingSlot(Number(slot.id));
+        }
+      } catch {}
+    }
+  }
+
+  return {
+    ok: true,
+    examPeriodId: ep,
+    requested: Array.isArray(missing) ? missing.length : 0,
+    created,
+    failed,
+    errors: errors.slice(0, Math.max(1, Number(maxErrors) || 200)),
+  };
+}
+
+async function ensureSpeakingLinksOnStartup() {
+  try {
+    await ensureInit();
+    if (!DB.listExamPeriods || !DB.listSessionsMissingSpeakingSlot || !DB.createSpeakingSlot) return;
+    if (!hasZoomConfig()) {
+      console.log("[speaking-startup] skipped: Zoom is not configured");
+      return;
+    }
+
+    const periods = await DB.listExamPeriods();
+    const list = Array.isArray(periods) ? periods : [];
+    let totalCreated = 0;
+    let totalFailed = 0;
+
+    for (const p of list) {
+      const ep = Number(p?.id || 0);
+      if (!Number.isFinite(ep) || ep <= 0) continue;
+      const out = await autoGenerateSpeakingSlotsForExamPeriod(ep, { maxErrors: 20 });
+      totalCreated += Number(out?.created || 0);
+      totalFailed += Number(out?.failed || 0);
+      if (Number(out?.created || 0) > 0 || Number(out?.failed || 0) > 0) {
+        console.log(`[speaking-startup] examPeriod=${ep} created=${out.created} failed=${out.failed}`);
+      }
+    }
+    console.log(`[speaking-startup] complete created=${totalCreated} failed=${totalFailed}`);
+  } catch (e) {
+    console.error("[speaking-startup] error:", e?.message || e);
+  }
+}
+
+let _zoomTokenCache = { token: "", expAtMs: 0 };
+
+function hasZoomConfig() {
+  return !!(
+    String(process.env.ZOOM_ACCOUNT_ID || "").trim() &&
+    String(process.env.ZOOM_CLIENT_ID || "").trim() &&
+    String(process.env.ZOOM_CLIENT_SECRET || "").trim()
+  );
+}
+
+async function getZoomAccessToken() {
+  if (!hasZoomConfig()) {
+    throw new Error("Zoom is not configured. Set ZOOM_ACCOUNT_ID, ZOOM_CLIENT_ID, ZOOM_CLIENT_SECRET.");
+  }
+  const now = Date.now();
+  if (_zoomTokenCache.token && now < (_zoomTokenCache.expAtMs - 15000)) {
+    return _zoomTokenCache.token;
+  }
+
+  const accountId = String(process.env.ZOOM_ACCOUNT_ID || "").trim();
+  const clientId = String(process.env.ZOOM_CLIENT_ID || "").trim();
+  const clientSecret = String(process.env.ZOOM_CLIENT_SECRET || "").trim();
+  const basic = Buffer.from(`${clientId}:${clientSecret}`, "utf8").toString("base64");
+  const url = `https://zoom.us/oauth/token?grant_type=account_credentials&account_id=${encodeURIComponent(accountId)}`;
+
+  const r = await fetch(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basic}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j?.access_token) {
+    throw new Error(`Zoom token request failed (${r.status})`);
+  }
+  const expSec = Number(j.expires_in || 3600);
+  _zoomTokenCache = {
+    token: String(j.access_token),
+    expAtMs: Date.now() + Math.max(60, expSec) * 1000,
+  };
+  return _zoomTokenCache.token;
+}
+
+function zoomDurationMinutes(slot) {
+  const s = Number(slot?.startUtcMs || 0);
+  const e = Number(slot?.endUtcMs || 0);
+  const mins = Math.round((e - s) / (60 * 1000));
+  return Number.isFinite(mins) && mins > 0 ? mins : 30;
+}
+
+function zoomTopicForSlot(slot) {
+  const candidate = String(slot?.candidateName || "").trim();
+  return candidate ? `Speaking Interview - ${candidate}` : "Speaking Interview";
+}
+
+async function createZoomMeetingForSlot(slot) {
+  const token = await getZoomAccessToken();
+  const userId = String(process.env.ZOOM_USER_ID || "me").trim() || "me";
+  const start = Number(slot?.startUtcMs || 0);
+  if (!Number.isFinite(start) || start <= 0) throw new Error("Invalid slot start time for Zoom");
+
+  const body = {
+    topic: zoomTopicForSlot(slot),
+    type: 2,
+    start_time: new Date(start).toISOString(),
+    duration: zoomDurationMinutes(slot),
+    timezone: String(process.env.ZOOM_TIMEZONE || "Europe/Athens"),
+    settings: {
+      host_video: true,
+      participant_video: true,
+      waiting_room: true,
+      join_before_host: false,
+    },
+  };
+
+  const r = await fetch(`https://api.zoom.us/v2/users/${encodeURIComponent(userId)}/meetings`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j?.id || !j?.join_url) {
+    throw new Error(`Zoom meeting create failed (${r.status})`);
+  }
+  return {
+    meetingId: String(j.id),
+    joinUrl: String(j.join_url || ""),
+    startUrl: String(j.start_url || j.join_url || ""),
+    metadata: {
+      provider: "zoom",
+      autoGenerated: true,
+      zoomMeetingUuid: String(j.uuid || ""),
+      zoomTopic: String(j.topic || body.topic),
+      zoomTimezone: String(j.timezone || body.timezone),
+      createdAtUtcMs: Date.now(),
+    },
+  };
+}
+
+async function updateZoomMeetingForSlot(slot) {
+  const meetingId = String(slot?.meetingId || "").trim();
+  if (!meetingId) return;
+  const token = await getZoomAccessToken();
+  const start = Number(slot?.startUtcMs || 0);
+  if (!Number.isFinite(start) || start <= 0) return;
+
+  const body = {
+    topic: zoomTopicForSlot(slot),
+    start_time: new Date(start).toISOString(),
+    duration: zoomDurationMinutes(slot),
+    timezone: String(process.env.ZOOM_TIMEZONE || "Europe/Athens"),
+  };
+
+  const r = await fetch(`https://api.zoom.us/v2/meetings/${encodeURIComponent(meetingId)}`, {
+    method: "PATCH",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) {
+    throw new Error(`Zoom meeting update failed (${r.status})`);
+  }
+}
+
+async function deleteZoomMeetingById(meetingId) {
+  const mid = String(meetingId || "").trim();
+  if (!mid) return;
+  const token = await getZoomAccessToken();
+  const r = await fetch(`https://api.zoom.us/v2/meetings/${encodeURIComponent(mid)}`, {
+    method: "DELETE",
+    headers: {
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  // 204 deleted, 404 already gone -> both considered fine.
+  if (r.status === 204 || r.status === 404) return;
+  if (!r.ok) {
+    throw new Error(`Zoom meeting delete failed (${r.status})`);
+  }
 }
 
 
@@ -630,6 +1149,22 @@ app.get("/api/admin/candidates/:sessionId/details", async (req, res) => {
   });
 });
 
+app.get("/api/admin/sessions/:sessionId/schedule-defaults", async (req, res) => {
+  await ensureInit();
+  const a = await adminAuth(req, res);
+  if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+  if (typeof DB.getSessionScheduleDefaults !== "function") {
+    return res.status(501).json({ error: "Endpoint unavailable for this DB adapter" });
+  }
+  const sid = Number(req.params.sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) {
+    return res.status(400).json({ error: "Invalid session id" });
+  }
+  const out = await DB.getSessionScheduleDefaults(sid);
+  if (!out) return res.status(404).json({ error: "Session not found" });
+  res.json(out);
+});
+
 app.post("/api/admin/export-candidates", async (req, res) => {
   await ensureInit();
   const a = await adminAuth(req, res);
@@ -811,6 +1346,39 @@ app.post("/api/admin/delete-all-data", async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post("/api/admin/candidates/bulk-delete", async (req, res) => {
+  await ensureInit();
+  const a = await adminAuth(req, res);
+  if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+  if (!DB.deleteCandidateBySessionId) return res.status(501).json({ error: "Not supported on this DB adapter" });
+
+  const idsRaw = Array.isArray(req.body?.sessionIds) ? req.body.sessionIds : [];
+  const ids = Array.from(new Set(idsRaw.map((x) => Number(x)).filter((n) => Number.isFinite(n) && n > 0)));
+  if (!ids.length) return res.status(400).json({ error: "No sessionIds provided" });
+
+  let okCount = 0;
+  let failCount = 0;
+  const errors = [];
+  for (const sid of ids) {
+    try {
+      const out = await DB.deleteCandidateBySessionId(sid);
+      if (out?.ok) okCount += 1;
+      else failCount += 1;
+    } catch (e) {
+      failCount += 1;
+      errors.push({ sessionId: sid, error: String(e?.message || "delete_failed") });
+    }
+  }
+
+  res.json({
+    ok: true,
+    requested: ids.length,
+    deleted: okCount,
+    failed: failCount,
+    errors: errors.slice(0, 100),
+  });
+});
+
 // Delete a candidate completely (candidates + sessions + question_grades)
 // Identified by session id (row in admin candidates table).
 app.delete("/api/admin/candidates/:sessionId", async (req, res) => {
@@ -837,6 +1405,33 @@ app.get("/api/examiner/exam-periods", async (req, res) => {
   const a = await examinerAuth(req, res);
   if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
   res.json(await DB.listExamPeriods());
+});
+
+app.get("/api/examiner/speaking-slots", async (req, res) => {
+  await ensureInit();
+  const a = await examinerAuth(req, res);
+  if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+  if (!DB.listSpeakingSlots) return res.json([]);
+  const examPeriodId = req.query?.examPeriodId;
+  const fromUtcMs = req.query?.fromUtcMs;
+  const toUtcMs = req.query?.toUtcMs;
+  const limit = req.query?.limit;
+  const out = await DB.listSpeakingSlots({
+    examPeriodId: examPeriodId === undefined ? undefined : Number(examPeriodId),
+    fromUtcMs: fromUtcMs === undefined ? undefined : Number(fromUtcMs),
+    toUtcMs: toUtcMs === undefined ? undefined : Number(toUtcMs),
+    limit: limit === undefined ? undefined : Number(limit),
+    examinerUsername: a.user,
+  });
+  const base = getPublicBase(req);
+  const rows = (Array.isArray(out) ? out : []).map((r) => {
+    const tok = String(r?.sessionToken || "").trim();
+    return {
+      ...r,
+      speakingUrl: tok ? `${base}/speaking.html?token=${encodeURIComponent(tok)}` : "",
+    };
+  });
+  res.json(rows);
 });
 
 app.post("/api/examiner/export-excel", async (req, res) => {
@@ -936,6 +1531,43 @@ app.post("/api/examiner/sessions/:id/finalize-grade", async (req, res) => {
   res.json(out);
 });
 
+// Public speaking gate endpoint (token-based countdown -> redirect URL).
+app.get("/api/speaking/:token", async (req, res) => {
+  await ensureInit();
+  const token = String(req.params.token || "").trim();
+  if (!token) return res.status(400).json({ error: "Missing token" });
+  if (!DB.getSpeakingJoinBySessionToken) {
+    return res.status(501).json({ error: "Speaking gate endpoint unavailable for this DB adapter" });
+  }
+
+  const slot = await DB.getSpeakingJoinBySessionToken(token);
+  if (!slot) return res.status(404).json({ error: "No speaking slot found for this token" });
+
+  const now = Date.now();
+  const startUtcMs = Number(slot.startUtcMs || 0);
+  const endUtcMs = Number(slot.endUtcMs || 0);
+  const out = {
+    status: "countdown",
+    serverNow: now,
+    startUtcMs,
+    endUtcMs,
+    candidateName: String(slot.candidateName || ""),
+    sessionToken: String(slot.sessionToken || token),
+  };
+
+  if (Number.isFinite(startUtcMs) && Number.isFinite(endUtcMs)) {
+    if (now < startUtcMs) return res.json(out);
+    if (now > endUtcMs) return res.json({ ...out, status: "ended" });
+    return res.json({
+      ...out,
+      status: "open",
+      redirectUrl: String(slot.joinUrl || "").trim(),
+    });
+  }
+
+  return res.json(out);
+});
+
 
 // Exam routes (gated)
 app.get("/api/session/:token", async (req, res) => {
@@ -991,4 +1623,7 @@ app.post("/api/session/:token/submit", async (req, res) => {
 });
 
 const port = Number(process.env.PORT || 8080);
-app.listen(port, () => console.log(`API+UI running on http://localhost:${port}`));
+app.listen(port, () => {
+  console.log(`API+UI running on http://localhost:${port}`);
+  void ensureSpeakingLinksOnStartup();
+});

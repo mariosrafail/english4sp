@@ -1,9 +1,10 @@
-const { Pool } = require("pg");
+﻿const { Pool } = require("pg");
 const { hashPassword, verifyPassword } = require("./auth");
 const { getTestPayloadFull, getTestPayloadForClient, OPEN_AT_UTC_MS: DEFAULT_OPEN_AT_UTC_MS, DURATION_MINUTES: DEFAULT_DURATION_MINUTES } = require("./test_config");
 
 let pool = null;
 // Exam periods now hold per-period configuration (open time + duration).
+const SPEAKING_SLOT_DURATION_MINUTES = 60;
 
 function getConnString() {
   return (
@@ -273,6 +274,148 @@ if (!arows.rows.length) {
   await q(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_examiner_assignments_session_id ON public.examiner_assignments(session_id);`);
   await q(`CREATE INDEX IF NOT EXISTS idx_examiner_assignments_examiner_id ON public.examiner_assignments(examiner_id);`);
   await q(`CREATE INDEX IF NOT EXISTS idx_examiner_assignments_session_id ON public.examiner_assignments(session_id);`);
+
+  // speaking interview slots (calendar scheduling + optional video meeting metadata)
+  // Migrate legacy table name oral_slots -> speaking_slots.
+  await q(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.speaking_slots') IS NULL AND to_regclass('public.oral_slots') IS NOT NULL THEN
+        ALTER TABLE public.oral_slots RENAME TO speaking_slots;
+      END IF;
+    END $$;
+  `);
+  await q(`
+    DO $$
+    BEGIN
+      IF to_regclass('public.speaking_slots') IS NOT NULL
+         AND EXISTS (
+           SELECT 1
+           FROM pg_constraint
+           WHERE conrelid = 'public.speaking_slots'::regclass
+             AND conname = 'oral_slots_examiner_username_fkey'
+         ) THEN
+        ALTER TABLE public.speaking_slots
+        RENAME CONSTRAINT oral_slots_examiner_username_fkey TO speaking_slots_examiner_username_fkey;
+      END IF;
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END $$;
+  `);
+  await q(`
+    CREATE TABLE IF NOT EXISTS public.speaking_slots (
+      id SERIAL PRIMARY KEY,
+      exam_period_id INT,
+      session_id INT,
+      candidate_id BIGINT,
+      candidate_name TEXT NOT NULL,
+      start_utc_ms BIGINT NOT NULL,
+      end_utc_ms BIGINT NOT NULL,
+      video_provider TEXT NOT NULL DEFAULT 'manual',
+      examiner_username TEXT,
+      meeting_id TEXT,
+      join_url TEXT,
+      start_url TEXT,
+      meeting_metadata_json JSONB,
+      status TEXT NOT NULL DEFAULT 'scheduled',
+      created_at_utc_ms BIGINT NOT NULL,
+      updated_at_utc_ms BIGINT NOT NULL,
+      CONSTRAINT speaking_slots_exam_period_fk FOREIGN KEY (exam_period_id) REFERENCES public.exam_periods(id) ON DELETE SET NULL,
+      CONSTRAINT speaking_slots_session_fk FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE SET NULL,
+      CONSTRAINT speaking_slots_candidate_fk FOREIGN KEY (candidate_id) REFERENCES public.candidates(id) ON DELETE SET NULL
+    );
+  `);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS exam_period_id INT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS session_id INT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS candidate_id BIGINT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS candidate_name TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS start_utc_ms BIGINT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS end_utc_ms BIGINT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS video_provider TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS examiner_username TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS meeting_id TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS join_url TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS start_url TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS meeting_metadata_json JSONB;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS status TEXT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS created_at_utc_ms BIGINT;`);
+  await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS updated_at_utc_ms BIGINT;`);
+  await q(`UPDATE public.speaking_slots SET video_provider = COALESCE(NULLIF(video_provider, ''), 'manual') WHERE video_provider IS NULL OR video_provider = '';`);
+  await q(`UPDATE public.speaking_slots SET status = COALESCE(NULLIF(status, ''), 'scheduled') WHERE status IS NULL OR status = '';`);
+  await q(`UPDATE public.speaking_slots SET meeting_id = COALESCE(NULLIF(meeting_id, ''), CONCAT('spk-', id::text, '-', start_utc_ms::text)) WHERE meeting_id IS NULL OR meeting_id = '';`);
+  await q(`UPDATE public.speaking_slots SET join_url = COALESCE(NULLIF(join_url, ''), CONCAT('https://meet.jit.si/eng4-speaking-', id::text, '-', start_utc_ms::text)) WHERE join_url IS NULL OR join_url = '';`);
+  await q(`UPDATE public.speaking_slots SET start_url = COALESCE(NULLIF(start_url, ''), join_url) WHERE start_url IS NULL OR start_url = '';`);
+  await q(`UPDATE public.speaking_slots SET created_at_utc_ms = COALESCE(created_at_utc_ms, EXTRACT(EPOCH FROM now())::bigint * 1000) WHERE created_at_utc_ms IS NULL;`);
+  await q(`UPDATE public.speaking_slots SET updated_at_utc_ms = COALESCE(updated_at_utc_ms, created_at_utc_ms, EXTRACT(EPOCH FROM now())::bigint * 1000) WHERE updated_at_utc_ms IS NULL;`);
+  await q(`
+    DO $$
+    BEGIN
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN candidate_name SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN start_utc_ms SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN end_utc_ms SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN video_provider SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN status SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN created_at_utc_ms SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+      BEGIN
+        ALTER TABLE public.speaking_slots
+        ALTER COLUMN updated_at_utc_ms SET NOT NULL;
+      EXCEPTION WHEN others THEN
+        NULL;
+      END;
+    END $$;
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_speaking_slots_exam_period_start ON public.speaking_slots(exam_period_id, start_utc_ms);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_speaking_slots_start ON public.speaking_slots(start_utc_ms);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_speaking_slots_session_id ON public.speaking_slots(session_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_speaking_slots_examiner_username ON public.speaking_slots(examiner_username);`);
+  await q(`CREATE UNIQUE INDEX IF NOT EXISTS uniq_speaking_slots_session_id_not_null ON public.speaking_slots(session_id) WHERE session_id IS NOT NULL;`);
+  await q(`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'speaking_slots_examiner_username_fkey'
+          AND conrelid = 'public.speaking_slots'::regclass
+      ) THEN
+        ALTER TABLE public.speaking_slots
+        ADD CONSTRAINT speaking_slots_examiner_username_fkey
+        FOREIGN KEY (examiner_username) REFERENCES public.examiners(username) ON DELETE SET NULL;
+      END IF;
+    EXCEPTION WHEN duplicate_object THEN
+      NULL;
+    END $$;
+  `);
 
   // Per-question grades (A,B,C as text)
   await q(`
@@ -961,6 +1104,52 @@ async function listCandidates() {
   return r.rows;
 }
 
+async function listSessionsMissingSpeakingSlot(examPeriodId) {
+  const ep = Number(examPeriodId);
+  if (!Number.isFinite(ep) || ep <= 0) throw new Error("Invalid exam period id");
+  const r = await q(
+    `SELECT s.id AS "sessionId",
+            s.exam_period_id AS "examPeriodId"
+     FROM public.sessions s
+     LEFT JOIN public.speaking_slots os ON os.session_id = s.id
+     WHERE s.exam_period_id = $1
+       AND os.id IS NULL
+     ORDER BY s.id ASC
+     LIMIT 50000;`,
+    [ep]
+  );
+  return (r.rows || []).map((row) => ({
+    sessionId: Number(row.sessionId),
+    examPeriodId: Number(row.examPeriodId),
+  }));
+}
+
+async function getSessionScheduleDefaults(sessionId) {
+  const sid = Number(sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) return null;
+
+  const s = await q1(
+    `SELECT s.id, s.name, s.exam_period_id
+     FROM public.sessions s
+     WHERE s.id = $1
+     LIMIT 1;`,
+    [sid]
+  );
+  if (!s) return null;
+
+  const examinerUsername = await ensureSessionAssignedExaminer({
+    sessionId: Number(s.id),
+    examPeriodId: Number(s.exam_period_id),
+  });
+
+  return {
+    sessionId: Number(s.id),
+    candidateName: String(s.name || ""),
+    examPeriodId: Number(s.exam_period_id || 0) || null,
+    examinerUsername: String(examinerUsername || ""),
+  };
+}
+
 // Delete a candidate completely (candidate row + all their sessions + grades)
 // Identified via a session id (row in admin candidates table).
 async function deleteCandidateBySessionId(sessionId) {
@@ -992,6 +1181,13 @@ async function deleteCandidateBySessionId(sessionId) {
          WHERE session_id IN (SELECT id FROM public.sessions WHERE candidate_id = $1)`,
         [candidateId]
       );
+      // Delete speaking slots bound to this candidate sessions, and any orphaned rows by candidate_id.
+      await client.query(
+        `DELETE FROM public.speaking_slots
+         WHERE session_id IN (SELECT id FROM public.sessions WHERE candidate_id = $1)
+            OR candidate_id = $1`,
+        [candidateId]
+      );
       // Delete all sessions
       const sdel = await client.query(
         `DELETE FROM public.sessions WHERE candidate_id = $1`,
@@ -1005,6 +1201,7 @@ async function deleteCandidateBySessionId(sessionId) {
 
     // Fallback (older rows without candidate_id): delete only the session + its grades
     await client.query(`DELETE FROM public.question_grades WHERE session_id = $1`, [sid]);
+    await client.query(`DELETE FROM public.speaking_slots WHERE session_id = $1`, [sid]);
     const sdel = await client.query(`DELETE FROM public.sessions WHERE id = $1`, [sid]);
     await client.query("COMMIT");
     return { ok: true, deleted: Number(sdel.rowCount || 0) };
@@ -1073,6 +1270,394 @@ async function listExamPeriods() {
     openAtUtc: Number(row.open_at_utc_ms),
     durationMinutes: Number(row.duration_minutes),
   }));
+}
+
+function normalizeSpeakingSlotRow(row = {}) {
+  let metadata = row.meeting_metadata_json;
+  if (typeof metadata === "string") {
+    try { metadata = JSON.parse(metadata); } catch { metadata = null; }
+  }
+  if (!metadata || typeof metadata !== "object") metadata = null;
+  return {
+    id: Number(row.id),
+    examPeriodId: row.exam_period_id === null || row.exam_period_id === undefined ? null : Number(row.exam_period_id),
+    sessionId: row.session_id === null || row.session_id === undefined ? null : Number(row.session_id),
+    candidateId: row.candidate_id === null || row.candidate_id === undefined ? null : Number(row.candidate_id),
+    candidateName: String(row.candidate_name || row.session_candidate_name || ""),
+    sessionToken: String(row.session_token || ""),
+    startUtcMs: Number(row.start_utc_ms),
+    endUtcMs: Number(row.end_utc_ms),
+    videoProvider: String(row.video_provider || "manual"),
+    examinerUsername: String(row.examiner_username || row.assigned_examiner || ""),
+    meetingId: String(row.meeting_id || ""),
+    joinUrl: String(row.join_url || ""),
+    startUrl: String(row.start_url || ""),
+    meetingMetadata: metadata,
+    status: String(row.status || "scheduled"),
+    createdAtUtcMs: Number(row.created_at_utc_ms || 0),
+    updatedAtUtcMs: Number(row.updated_at_utc_ms || 0),
+  };
+}
+
+async function listExaminers() {
+  const r = await q(
+    `SELECT id, username
+     FROM public.examiners
+     ORDER BY id ASC;`
+  );
+  return (r.rows || []).map((row) => ({
+    id: Number(row.id),
+    username: String(row.username || ""),
+  }));
+}
+
+async function listSpeakingSlots({ examPeriodId, examinerUsername, fromUtcMs, toUtcMs, limit } = {}) {
+  const filters = [];
+  const params = [];
+  const ep = Number(examPeriodId);
+  if (Number.isFinite(ep) && ep > 0) {
+    params.push(ep);
+    filters.push(`COALESCE(os.exam_period_id, s.exam_period_id) = $${params.length}`);
+  }
+  const examiner = String(examinerUsername || "").trim();
+  if (examiner) {
+    params.push(examiner);
+    filters.push(`COALESCE(NULLIF(os.examiner_username, ''), ex.username, '') = $${params.length}`);
+  }
+  const from = Number(fromUtcMs);
+  if (Number.isFinite(from) && from > 0) {
+    params.push(from);
+    filters.push(`os.end_utc_ms >= $${params.length}`);
+  }
+  const to = Number(toUtcMs);
+  if (Number.isFinite(to) && to > 0) {
+    params.push(to);
+    filters.push(`os.start_utc_ms <= $${params.length}`);
+  }
+  const limRaw = Number(limit);
+  const lim = Number.isFinite(limRaw) && limRaw > 0 ? Math.min(5000, Math.round(limRaw)) : 1500;
+  params.push(lim);
+
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const r = await q(
+    `SELECT
+        os.*,
+        s.name AS session_candidate_name,
+        s.token AS session_token,
+        s.exam_period_id AS session_exam_period_id,
+        ea.examiner_id AS assignment_examiner_id,
+        ex.username AS assigned_examiner
+     FROM public.speaking_slots os
+     LEFT JOIN public.sessions s ON s.id = os.session_id
+     LEFT JOIN public.examiner_assignments ea ON ea.session_id = os.session_id
+     LEFT JOIN public.examiners ex ON ex.id = ea.examiner_id
+     ${where}
+     ORDER BY os.start_utc_ms ASC, os.id ASC
+     LIMIT $${params.length};`,
+    params
+  );
+  return (r.rows || []).map(normalizeSpeakingSlotRow);
+}
+
+async function getSpeakingSlotById(id) {
+  const slotId = Number(id);
+  if (!Number.isFinite(slotId) || slotId <= 0) return null;
+  const row = await q1(
+    `SELECT
+        os.*,
+        s.name AS session_candidate_name,
+        s.token AS session_token,
+        s.exam_period_id AS session_exam_period_id,
+        ea.examiner_id AS assignment_examiner_id,
+        ex.username AS assigned_examiner
+     FROM public.speaking_slots os
+     LEFT JOIN public.sessions s ON s.id = os.session_id
+     LEFT JOIN public.examiner_assignments ea ON ea.session_id = os.session_id
+     LEFT JOIN public.examiners ex ON ex.id = ea.examiner_id
+     WHERE os.id = $1
+     LIMIT 1;`,
+    [slotId]
+  );
+  return row ? normalizeSpeakingSlotRow(row) : null;
+}
+
+async function createSpeakingSlot(input = {}) {
+  const now = Date.now();
+  const sessionId = Number(input.sessionId);
+  let session = null;
+  if (Number.isFinite(sessionId) && sessionId > 0) {
+    session = await q1(
+      `SELECT s.id, s.exam_period_id, s.candidate_id, s.name
+       FROM public.sessions s
+       WHERE s.id = $1
+       LIMIT 1;`,
+      [sessionId]
+    );
+    if (!session) throw new Error("Session not found");
+  }
+
+  const providedStart = Number(input.startUtcMs);
+  const providedEnd = Number(input.endUtcMs);
+  const durationMinutes = SPEAKING_SLOT_DURATION_MINUTES;
+  if (!Number.isFinite(providedStart) || providedStart <= 0) throw new Error("Invalid start time");
+  const endUtcMs = Number.isFinite(providedEnd) && providedEnd > providedStart
+    ? providedEnd
+    : (Number.isFinite(durationMinutes) && durationMinutes > 0 ? providedStart + durationMinutes * 60 * 1000 : NaN);
+  if (!Number.isFinite(endUtcMs) || endUtcMs <= providedStart) throw new Error("Invalid end time");
+
+  const examPeriodIdRaw = Number(input.examPeriodId);
+  const examPeriodId = Number.isFinite(examPeriodIdRaw) && examPeriodIdRaw > 0
+    ? examPeriodIdRaw
+    : Number(session?.exam_period_id || 0);
+  const candidateId = session?.candidate_id ? Number(session.candidate_id) : null;
+  const candidateName = session
+    ? String(session.name || "").trim()
+    : String(input.candidateName || "").trim();
+  if (!candidateName) throw new Error("Candidate name is required");
+
+  const videoProvider = String(input.videoProvider || "manual").trim().toLowerCase() || "manual";
+  const status = String(input.status || "scheduled").trim().toLowerCase() || "scheduled";
+  let examinerUsername = "";
+  if (session) {
+    examinerUsername = await ensureSessionAssignedExaminer({
+      sessionId: Number(session.id),
+      examPeriodId: Number(session.exam_period_id),
+    });
+  } else {
+    examinerUsername = String(input.examinerUsername || "").trim();
+  }
+
+  if (examinerUsername) {
+    const ex = await q1(`SELECT 1 FROM public.examiners WHERE username = $1 LIMIT 1;`, [examinerUsername]);
+    if (!ex) throw new Error("Invalid examiner username");
+  }
+
+  let meetingMetadata = input.meetingMetadata;
+  if (meetingMetadata && typeof meetingMetadata !== "object") {
+    try { meetingMetadata = JSON.parse(String(meetingMetadata)); } catch { meetingMetadata = null; }
+  }
+  if (!meetingMetadata || typeof meetingMetadata !== "object") meetingMetadata = null;
+
+  // Default auto-generated meeting link when provider integration does not supply one yet.
+  const autoMeetingId = `spk-${session ? Number(session.id) : "x"}-${Math.floor(providedStart / 1000)}`;
+  const meetingIdVal = String(input.meetingId || "").trim() || autoMeetingId;
+  const joinUrlVal = String(input.joinUrl || "").trim() || `https://meet.jit.si/eng4-speaking-${meetingIdVal}`;
+  const startUrlVal = String(input.startUrl || "").trim() || joinUrlVal;
+  if (!meetingMetadata) {
+    meetingMetadata = {
+      autoGenerated: true,
+      generatedBy: "server_default_link",
+      requestedProvider: videoProvider,
+    };
+  }
+
+  const r = await q(
+    `INSERT INTO public.speaking_slots
+      (exam_period_id, session_id, candidate_id, candidate_name, start_utc_ms, end_utc_ms, video_provider,
+       examiner_username, meeting_id, join_url, start_url, meeting_metadata_json, status, created_at_utc_ms, updated_at_utc_ms)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13,$14,$15)
+     RETURNING *;`,
+    [
+      Number.isFinite(examPeriodId) && examPeriodId > 0 ? examPeriodId : null,
+      session ? Number(session.id) : null,
+      Number.isFinite(candidateId) && candidateId > 0 ? candidateId : null,
+      candidateName,
+      providedStart,
+      endUtcMs,
+      videoProvider,
+      examinerUsername || null,
+      meetingIdVal,
+      joinUrlVal,
+      startUrlVal,
+      meetingMetadata ? JSON.stringify(meetingMetadata) : null,
+      status,
+      now,
+      now,
+    ]
+  );
+  const createdId = Number(r.rows?.[0]?.id || 0);
+  if (createdId > 0) {
+    const full = await getSpeakingSlotById(createdId);
+    if (full) return full;
+  }
+  return normalizeSpeakingSlotRow(r.rows[0]);
+}
+
+async function updateSpeakingSlot({ id, ...input } = {}) {
+  const slotId = Number(id);
+  if (!Number.isFinite(slotId) || slotId <= 0) throw new Error("Invalid slot id");
+  const existing = await q1(`SELECT * FROM public.speaking_slots WHERE id = $1 LIMIT 1;`, [slotId]);
+  if (!existing) return null;
+
+  const next = {
+    examPeriodId: existing.exam_period_id === null || existing.exam_period_id === undefined ? null : Number(existing.exam_period_id),
+    sessionId: existing.session_id === null || existing.session_id === undefined ? null : Number(existing.session_id),
+    candidateId: existing.candidate_id === null || existing.candidate_id === undefined ? null : Number(existing.candidate_id),
+    candidateName: String(existing.candidate_name || ""),
+    startUtcMs: Number(existing.start_utc_ms),
+    endUtcMs: Number(existing.end_utc_ms),
+    videoProvider: String(existing.video_provider || "manual"),
+    examinerUsername: String(existing.examiner_username || ""),
+    meetingId: String(existing.meeting_id || ""),
+    joinUrl: String(existing.join_url || ""),
+    startUrl: String(existing.start_url || ""),
+    status: String(existing.status || "scheduled"),
+    meetingMetadata: existing.meeting_metadata_json || null,
+  };
+
+  if (Object.prototype.hasOwnProperty.call(input, "sessionId")) {
+    const sid = Number(input.sessionId);
+    if (!Number.isFinite(sid) || sid <= 0) {
+      next.sessionId = null;
+      next.candidateId = null;
+    } else {
+      const s = await q1(
+        `SELECT id, exam_period_id, candidate_id, name
+         FROM public.sessions
+         WHERE id = $1
+         LIMIT 1;`,
+        [sid]
+      );
+      if (!s) throw new Error("Session not found");
+      next.sessionId = Number(s.id);
+      next.candidateId = s.candidate_id === null || s.candidate_id === undefined ? null : Number(s.candidate_id);
+      next.candidateName = String(s.name || next.candidateName);
+      next.examinerUsername = await ensureSessionAssignedExaminer({
+        sessionId: Number(s.id),
+        examPeriodId: Number(s.exam_period_id),
+      });
+      if (!Object.prototype.hasOwnProperty.call(input, "examPeriodId")) {
+        next.examPeriodId = Number(s.exam_period_id || next.examPeriodId || 0) || null;
+      }
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(input, "examPeriodId")) {
+    const ep = Number(input.examPeriodId);
+    next.examPeriodId = Number.isFinite(ep) && ep > 0 ? ep : null;
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "candidateName")) {
+    const nm = String(input.candidateName || "").trim();
+    if (!nm) throw new Error("Candidate name is required");
+    next.candidateName = nm;
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "startUtcMs")) {
+    const v = Number(input.startUtcMs);
+    if (!Number.isFinite(v) || v <= 0) throw new Error("Invalid start time");
+    next.startUtcMs = v;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(input, "startUtcMs") ||
+    Object.prototype.hasOwnProperty.call(input, "endUtcMs") ||
+    Object.prototype.hasOwnProperty.call(input, "durationMinutes")
+  ) {
+    next.endUtcMs = next.startUtcMs + SPEAKING_SLOT_DURATION_MINUTES * 60 * 1000;
+  }
+  if (!Number.isFinite(next.endUtcMs) || next.endUtcMs <= next.startUtcMs) throw new Error("Invalid end time");
+
+  if (Object.prototype.hasOwnProperty.call(input, "videoProvider")) {
+    next.videoProvider = String(input.videoProvider || "manual").trim().toLowerCase() || "manual";
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "status")) {
+    next.status = String(input.status || "scheduled").trim().toLowerCase() || "scheduled";
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "examinerUsername")) {
+    next.examinerUsername = String(input.examinerUsername || "").trim();
+  }
+  if (next.examinerUsername) {
+    const ex = await q1(`SELECT 1 FROM public.examiners WHERE username = $1 LIMIT 1;`, [next.examinerUsername]);
+    if (!ex) throw new Error("Invalid examiner username");
+  }
+  if (Object.prototype.hasOwnProperty.call(input, "meetingId")) next.meetingId = String(input.meetingId || "").trim();
+  if (Object.prototype.hasOwnProperty.call(input, "joinUrl")) next.joinUrl = String(input.joinUrl || "").trim();
+  if (Object.prototype.hasOwnProperty.call(input, "startUrl")) next.startUrl = String(input.startUrl || "").trim();
+
+  if (Object.prototype.hasOwnProperty.call(input, "meetingMetadata")) {
+    let mm = input.meetingMetadata;
+    if (mm && typeof mm !== "object") {
+      try { mm = JSON.parse(String(mm)); } catch { mm = null; }
+    }
+    next.meetingMetadata = mm && typeof mm === "object" ? mm : null;
+  }
+
+  const r = await q(
+    `UPDATE public.speaking_slots
+     SET exam_period_id = $2,
+         session_id = $3,
+         candidate_id = $4,
+         candidate_name = $5,
+         start_utc_ms = $6,
+         end_utc_ms = $7,
+         video_provider = $8,
+         examiner_username = $9,
+         meeting_id = $10,
+         join_url = $11,
+         start_url = $12,
+         meeting_metadata_json = $13::jsonb,
+         status = $14,
+         updated_at_utc_ms = $15
+     WHERE id = $1
+     RETURNING *;`,
+    [
+      slotId,
+      next.examPeriodId,
+      next.sessionId,
+      next.candidateId,
+      next.candidateName,
+      next.startUtcMs,
+      next.endUtcMs,
+      next.videoProvider,
+      next.examinerUsername || null,
+      next.meetingId || null,
+      next.joinUrl || null,
+      next.startUrl || null,
+      next.meetingMetadata ? JSON.stringify(next.meetingMetadata) : null,
+      next.status,
+      Date.now(),
+    ]
+  );
+  if (!r.rows.length) return null;
+  const full = await getSpeakingSlotById(slotId);
+  return full || normalizeSpeakingSlotRow(r.rows[0]);
+}
+
+async function deleteSpeakingSlot(id) {
+  const slotId = Number(id);
+  if (!Number.isFinite(slotId) || slotId <= 0) throw new Error("Invalid slot id");
+  const r = await q(`DELETE FROM public.speaking_slots WHERE id = $1;`, [slotId]);
+  return { ok: true, deleted: Number(r.rowCount || 0) };
+}
+
+async function getSpeakingJoinBySessionToken(token) {
+  const tok = String(token || "").trim();
+  if (!tok) return null;
+  const now = Date.now();
+
+  // Pick active slot first, then nearest upcoming slot, then latest past slot.
+  const row = await q1(
+    `SELECT
+        os.*,
+        s.token AS session_token,
+        s.name AS session_candidate_name
+     FROM public.speaking_slots os
+     JOIN public.sessions s ON s.id = os.session_id
+     WHERE s.token = $1
+     ORDER BY
+       CASE
+         WHEN $2 BETWEEN os.start_utc_ms AND os.end_utc_ms THEN 0
+         WHEN $2 < os.start_utc_ms THEN 1
+         ELSE 2
+       END ASC,
+       CASE
+         WHEN $2 < os.start_utc_ms THEN os.start_utc_ms - $2
+         ELSE $2 - os.end_utc_ms
+       END ASC,
+       os.id DESC
+     LIMIT 1;`,
+    [tok, now]
+  );
+  if (!row) return null;
+  return normalizeSpeakingSlotRow(row);
 }
 
 async function createExamPeriod({ id, name, openAtUtc, durationMinutes } = {}) {
@@ -1286,12 +1871,21 @@ module.exports = {
   submitAnswers,
   listResults,
   listCandidates,
+  listSessionsMissingSpeakingSlot,
+  getSessionScheduleDefaults,
   listCandidatesForExaminer,
   examinerCanAccessSession,
   setExaminerGrades,
   presencePing,
   getConfig,
   listExamPeriods,
+  listExaminers,
+  listSpeakingSlots,
+  getSpeakingSlotById,
+  getSpeakingJoinBySessionToken,
+  createSpeakingSlot,
+  updateSpeakingSlot,
+  deleteSpeakingSlot,
   createExamPeriod,
   updateExamPeriod,
   deleteExamPeriod,
