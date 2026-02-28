@@ -46,6 +46,12 @@ let isApplying = false;
 let pendingApply = false;
 let _busyCount = 0;
 let _busyTimer = null;
+let _busyHideTimer = null;
+let _busyVisible = false;
+let _busyShownAtMs = 0;
+
+const BUSY_SHOW_DELAY_MS = 220;
+const BUSY_MIN_VISIBLE_MS = 450;
 
 function normalize(x) {
   return String(x || "").trim().toLowerCase();
@@ -96,6 +102,15 @@ function showCandidatesBusy(message) {
     elCandidatesBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
   }
 
+  if (_busyHideTimer) {
+    clearTimeout(_busyHideTimer);
+    _busyHideTimer = null;
+  }
+
+  if (_busyVisible) {
+    return;
+  }
+
   if (_busyTimer) {
     clearTimeout(_busyTimer);
     _busyTimer = null;
@@ -105,20 +120,55 @@ function showCandidatesBusy(message) {
   if (_busyCount === 1) {
     _busyTimer = setTimeout(() => {
       _busyTimer = null;
-      if (_busyCount > 0 && elCandidatesBusyOverlay) elCandidatesBusyOverlay.style.display = "flex";
-    }, 220);
+      if (_busyCount > 0 && elCandidatesBusyOverlay) {
+        elCandidatesBusyOverlay.style.display = "flex";
+        _busyVisible = true;
+        _busyShownAtMs = Date.now();
+      }
+    }, BUSY_SHOW_DELAY_MS);
   }
 }
 
 function hideCandidatesBusy() {
   _busyCount = Math.max(0, _busyCount - 1);
-  if (_busyCount === 0 && elCandidatesBusyOverlay) {
-    if (_busyTimer) {
-      clearTimeout(_busyTimer);
-      _busyTimer = null;
-    }
-    elCandidatesBusyOverlay.style.display = "none";
+  if (_busyCount !== 0) return;
+
+  if (_busyTimer) {
+    clearTimeout(_busyTimer);
+    _busyTimer = null;
   }
+
+  if (!elCandidatesBusyOverlay) return;
+
+  if (!_busyVisible) {
+    elCandidatesBusyOverlay.style.display = "none";
+    return;
+  }
+
+  const elapsed = Date.now() - Number(_busyShownAtMs || 0);
+  if (elapsed < BUSY_MIN_VISIBLE_MS) {
+    const wait = Math.max(0, BUSY_MIN_VISIBLE_MS - elapsed);
+    if (_busyHideTimer) clearTimeout(_busyHideTimer);
+    _busyHideTimer = setTimeout(() => {
+      _busyHideTimer = null;
+      if (_busyCount === 0 && elCandidatesBusyOverlay) elCandidatesBusyOverlay.style.display = "none";
+      _busyVisible = false;
+      _busyShownAtMs = 0;
+    }, wait);
+    return;
+  }
+
+  _busyVisible = false;
+  _busyShownAtMs = 0;
+  if (_busyHideTimer) {
+    clearTimeout(_busyHideTimer);
+    _busyHideTimer = null;
+  }
+  if (_busyTimer) {
+    clearTimeout(_busyTimer);
+    _busyTimer = null;
+  }
+  elCandidatesBusyOverlay.style.display = "none";
 }
 
 function askIncludeDetailedGrades() {
