@@ -335,40 +335,48 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
   });
 
   app.get("/api/admin/candidates/:sessionId/details", async (req, res) => {
-    await ensureInit();
-    const a = await adminAuth(req, res);
-    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    try {
+      await ensureInit();
+      const a = await adminAuth(req, res);
+      if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
 
-    const sid = Number(req.params.sessionId);
-    if (!Number.isFinite(sid) || sid <= 0) {
-      return res.status(400).json({ error: "Invalid session id" });
+      const sid = Number(req.params.sessionId);
+      if (!Number.isFinite(sid) || sid <= 0) {
+        return res.status(400).json({ error: "Invalid session id" });
+      }
+
+      if (!DB.getQuestionGrades) {
+        return res.status(501).json({ error: "Details endpoint is unavailable for this DB adapter" });
+      }
+
+      const qg = await DB.getQuestionGrades(sid);
+      if (!qg) return res.status(404).json({ error: "No submitted details found for this session" });
+
+      const ep = Number(qg.examPeriodId || 1);
+      const examPeriodId = Number.isFinite(ep) && ep > 0 ? ep : 1;
+      const payload = DB.getAdminTest ? await DB.getAdminTest(examPeriodId) : getTestPayloadFull();
+      const answersObj = parseAnswersJson(qg.answersJson);
+      const review = buildReviewItems(payload, answersObj);
+
+      res.json({
+        sessionId: sid,
+        examPeriodId,
+        qWriting: String(qg.qWriting || ""),
+        answersJson: answersObj,
+        totalGrade: qg.totalGrade ?? null,
+        speakingGrade: qg.speakingGrade ?? null,
+        writingGrade: qg.writingGrade ?? null,
+        objectiveEarned: review.objectiveEarned,
+        objectiveMax: review.objectiveMax,
+        items: review.items,
+      });
+    } catch (e) {
+      console.error("admin_candidate_details_error", {
+        sessionId: Number(req.params.sessionId || 0) || null,
+        error: String(e?.message || e || "details_failed"),
+      });
+      res.status(500).json({ error: "details_failed" });
     }
-
-    if (!DB.getQuestionGrades) {
-      return res.status(501).json({ error: "Details endpoint is unavailable for this DB adapter" });
-    }
-
-    const qg = await DB.getQuestionGrades(sid);
-    if (!qg) return res.status(404).json({ error: "No submitted details found for this session" });
-
-    const ep = Number(qg.examPeriodId || 1);
-    const examPeriodId = Number.isFinite(ep) && ep > 0 ? ep : 1;
-    const payload = DB.getAdminTest ? await DB.getAdminTest(examPeriodId) : getTestPayloadFull();
-    const answersObj = parseAnswersJson(qg.answersJson);
-    const review = buildReviewItems(payload, answersObj);
-
-    res.json({
-      sessionId: sid,
-      examPeriodId,
-      qWriting: String(qg.qWriting || ""),
-      answersJson: answersObj,
-      totalGrade: qg.totalGrade ?? null,
-      speakingGrade: qg.speakingGrade ?? null,
-      writingGrade: qg.writingGrade ?? null,
-      objectiveEarned: review.objectiveEarned,
-      objectiveMax: review.objectiveMax,
-      items: review.items,
-    });
   });
 
   app.get("/api/admin/sessions/:sessionId/schedule-defaults", async (req, res) => {
@@ -590,4 +598,3 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
     res.json(out);
   });
 };
-

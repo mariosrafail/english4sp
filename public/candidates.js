@@ -45,6 +45,7 @@ let applyTimer = null;
 let isApplying = false;
 let pendingApply = false;
 let _busyCount = 0;
+let _busyTimer = null;
 
 function normalize(x) {
   return String(x || "").trim().toLowerCase();
@@ -94,12 +95,28 @@ function showCandidatesBusy(message) {
   if (elCandidatesBusyText) {
     elCandidatesBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
   }
-  if (elCandidatesBusyOverlay) elCandidatesBusyOverlay.style.display = "flex";
+
+  if (_busyTimer) {
+    clearTimeout(_busyTimer);
+    _busyTimer = null;
+  }
+
+  // Avoid flicker for fast operations (match app.js behavior).
+  if (_busyCount === 1) {
+    _busyTimer = setTimeout(() => {
+      _busyTimer = null;
+      if (_busyCount > 0 && elCandidatesBusyOverlay) elCandidatesBusyOverlay.style.display = "flex";
+    }, 220);
+  }
 }
 
 function hideCandidatesBusy() {
   _busyCount = Math.max(0, _busyCount - 1);
   if (_busyCount === 0 && elCandidatesBusyOverlay) {
+    if (_busyTimer) {
+      clearTimeout(_busyTimer);
+      _busyTimer = null;
+    }
     elCandidatesBusyOverlay.style.display = "none";
   }
 }
@@ -587,7 +604,11 @@ elTbody.addEventListener("click", async (ev) => {
       }
       openReviewModal();
     } catch (e) {
-      await uiAlert(e?.message || String(e), { title: "Load Error" });
+      const msgRaw = String(e?.message || e || "");
+      const msg = msgRaw.includes("Failed to fetch")
+        ? "Network/Server error. Please try again. If it keeps happening, refresh the page."
+        : msgRaw;
+      await uiAlert(msg, { title: "Load Error" });
     } finally {
       hideCandidatesBusy();
       openBtn.disabled = false;
