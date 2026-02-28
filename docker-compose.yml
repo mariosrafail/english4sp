@@ -1,11 +1,31 @@
 services:
   app:
     build: .
+    depends_on:
+      - livekit
     environment:
-      PORT: 8080
-      DATABASE_URL: postgresql://neondb_owner:npg_dSN4MJKp2lkq@ep-floral-field-aeuxm9nl-pooler.c-2.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
-      CORS_ORIGIN: "*"
-      PUBLIC_BASE_URL: https://english4sp.stinis.ddns.net
+      PORT: ${PORT:-8080}
+      DATABASE_URL: ${DATABASE_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN:-"*"}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      SPEAKING_PROVIDER: ${SPEAKING_PROVIDER:-livekit}
+      LIVEKIT_URL: ${LIVEKIT_URL}
+      LIVEKIT_API_URL: ${LIVEKIT_API_URL:-http://livekit:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       UV_THREADPOOL_SIZE: 128
+    restart: unless-stopped
     ports:
       - "8080:8080"
+
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: livekit-server
+    restart: unless-stopped
+    command: ["--config", "/etc/livekit.yaml"]
+    volumes:
+      - ./deploy/livekit/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "50000-50100:50000-50100/udp"

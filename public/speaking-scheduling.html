@@ -10,7 +10,7 @@
 <body>
   <div class="wrap">
     <div class="card">
-      <div style="margin-bottom:10px">
+      <div style="margin-bottom:10px" data-embed-hide>
         <a class="badge" href="/admin.html" aria-label="Back to Admin" title="Back to Admin" style="display:inline-flex; align-items:center; justify-content:center; width:46px; height:42px; padding:0;">
           <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:22px; height:22px;">
             <path d="M14.7 5.3a1 1 0 0 1 0 1.4L10.41 11H20a1 1 0 1 1 0 2h-9.59l4.3 4.3a1 1 0 1 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.41 0Z" fill="currentColor"/>
@@ -18,7 +18,7 @@
         </a>
       </div>
 
-      <h1>Speaking Scheduling</h1>
+      <h1 data-embed-hide>Speaking Scheduling</h1>
       <div class="toolbar">
         <div class="controlsRow" style="justify-content:flex-start;">
           <div class="rightControls" style="width:100%; justify-content:flex-start;">
@@ -29,7 +29,7 @@
               <option value="">All examiners</option>
             </select>
             <button id="btnReload" type="button" style="width:auto; min-width:120px;">Reload</button>
-            <button id="btnRecreateZoom" type="button" style="width:auto; min-width:220px;">Recreate Zoom links (testing)</button>
+            <button id="btnRecreateMeeting" type="button" style="width:auto; min-width:220px;">Recreate Meeting links (testing)</button>
           </div>
         </div>
 
@@ -62,7 +62,7 @@
               <th>Candidate</th>
               <th>Examiner</th>
               <th>Link</th>
-              <th>Zoom URL</th>
+              <th>Meeting URL</th>
             </tr>
           </thead>
           <tbody id="tbody">
@@ -79,6 +79,14 @@
     </div>
   </div>
 
+  <div id="speakingBusyOverlay" class="adminBusyOverlay" style="display:none;" aria-live="polite" aria-busy="true">
+    <div class="adminBusyCard">
+      <div class="adminBusySpinner" aria-hidden="true"></div>
+      <div id="speakingBusyText" class="adminBusyText">Processing. Don't close this page. Please wait...</div>
+    </div>
+  </div>
+
   <script type="module" src="/speaking-scheduling.js"></script>
+  <script type="module" src="/embed_child.js"></script>
 </body>
 </html>

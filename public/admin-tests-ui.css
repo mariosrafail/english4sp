@@ -1,0 +1,307 @@
+.tests-bs{
+  background: radial-gradient(1200px 800px at 20% -10%, rgba(47,109,246,0.10), rgba(47,109,246,0.00) 60%),
+              radial-gradient(900px 700px at 85% 0%, rgba(34,197,94,0.08), rgba(34,197,94,0.00) 55%),
+              var(--bg);
+}
+
+.tests-bs{
+  overflow-x: hidden;
+}
+
+/* This page is embedded inside /admin.html (iframe ?embed=1).
+   styles.css makes embed pages transparent; override for the builder so it doesn't look "half / floating". */
+body.embed.tests-bs{
+  background: radial-gradient(1200px 800px at 20% -10%, rgba(47,109,246,0.10), rgba(47,109,246,0.00) 60%),
+              radial-gradient(900px 700px at 85% 0%, rgba(34,197,94,0.08), rgba(34,197,94,0.00) 55%),
+              var(--bg) !important;
+}
+body.embed.tests-bs .wrap{
+  padding: 18px !important;
+}
+body.embed.tests-bs .card{
+  background:#fff !important;
+  border: var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 18px !important;
+}
+
+/* Wider builder like the rest of the admin pages */
+.tests-bs .wrap{
+  /* Full-width builder (admin prefers wide workspace) */
+  max-width: none !important;
+  width: 100%;
+}
+
+/* Let the main card use the full available width inside wrap */
+.tests-bs .wrap > .card{
+  width: 100%;
+}
+
+/* Extra guard (in case other styles win) */
+.tests-bs .testsWrap{
+  max-width: none !important;
+  width: 100%;
+}
+
+/* Avoid global styles.css forcing full-width buttons. */
+.tests-bs button.btn,
+.tests-bs a.btn{
+  width:auto !important;
+}
+
+.tests-bs .card{ border-radius: var(--radius); }
+
+/* Make Bootstrap buttons feel like the app's buttons (squared corners, same palette). */
+.tests-bs .btn{
+  border-radius: 4px;
+  border: 1px solid var(--btnBorder);
+  background-color: var(--btnBase);
+  background-image: linear-gradient(var(--btnFill, var(--accent)), var(--btnFill, var(--accent)));
+  background-repeat: no-repeat;
+  background-position: left top;
+  background-size: 0% 100%;
+  color: var(--btnText);
+  font-weight: 700;
+  box-shadow: none;
+  transition: background-size .18s ease, border-color .15s ease, color .15s ease, opacity .15s ease, background-color .15s ease;
+}
+.tests-bs .btn:hover{
+  border-color: rgba(47,109,246,0.62);
+  color:#fff;
+  background-size: 100% 100%;
+}
+.tests-bs .btn:active{
+  border-color: rgba(47,109,246,0.78);
+  color:#fff;
+  background-image: linear-gradient(var(--btnFillActive, var(--accentActive)), var(--btnFillActive, var(--accentActive)));
+  background-size: 100% 100%;
+}
+.tests-bs .btn.btn-primary{
+  background-color: transparent;
+  border-color: rgba(47,109,246,0.70);
+  color:#fff;
+  background-size: 100% 100%;
+}
+.tests-bs .btn.btn-primary:hover{ border-color: rgba(47,109,246,0.86); }
+.tests-bs .btn.btn-primary:active{ border-color: rgba(47,109,246,0.92); }
+.tests-bs .btn.btn-outline-secondary{
+  --btnFill: rgba(91,100,115,0.55);
+  --btnFillActive: rgba(91,100,115,0.65);
+  border-color: rgba(17,24,39,0.22);
+  color: var(--muted);
+  background-color: rgba(17,24,39,0.03);
+}
+.tests-bs .btn.btn-outline-secondary:hover{
+  border-color: rgba(17,24,39,0.32);
+}
+.tests-bs .btn.btn-outline-danger{
+  --btnFill: rgba(239,68,68,0.75);
+  --btnFillActive: rgba(220,38,38,0.85);
+  border-color: rgba(239,68,68,0.45);
+  color: rgba(153,27,27,1);
+  background-color: rgba(239,68,68,0.06);
+}
+.tests-bs .btn.btn-outline-danger:hover{
+  border-color: rgba(239,68,68,0.65);
+}
+
+.tests-bs .testsHeader{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+.tests-bs .testsHeader .left{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+}
+
+.tests-bs .testsHeader .right{
+  display:flex;
+  align-items:flex-end;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.tests-bs #examPeriod{ min-width: 260px; }
+.tests-bs select.form-select{
+  border-radius: 4px;
+  border: 1px solid rgba(17,24,39,0.18);
+  background-color:#fff;
+}
+
+/* Align the dropdown + Save button on the same baseline */
+.tests-bs .testsHeader .right .form-select{
+  height: 38px;
+}
+.tests-bs .testsHeader .right #btnSavePreview{
+  height: 38px;
+  padding-top: 0;
+  padding-bottom: 0;
+  display:inline-flex;
+  align-items:center;
+}
+
+.tests-bs .form-check-label{
+  display:inline;
+  margin:0 !important;
+}
+.tests-bs .form-check{
+  display:flex;
+  align-items:center;
+  gap:6px;
+}
+.tests-bs .form-check-input{
+  margin:0;
+  transform: scale(1.15);
+}
+
+.tests-bs .optionCorrect{
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+}
+
+.tests-bs .optionRow .optionText{
+  cursor: text;
+}
+
+.tests-bs .optionRow .form-check{
+  cursor: pointer;
+}
+
+/* Section tabs */
+.tests-bs .admin-q-tabs{ gap: 10px; }
+
+/* Editors */
+.tests-bs .editorCard{
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: var(--radius);
+  background:#fff;
+  padding: 14px;
+}
+
+/* Main 2-column layout (avoid .row conflicts with global styles.css) */
+.tests-bs .testsGrid{
+  margin-top:12px;
+  display:grid;
+  grid-template-columns: minmax(520px, 1fr) minmax(620px, 1.2fr);
+  gap: 16px;
+  align-items:start;
+}
+@media (max-width: 1100px){
+  .tests-bs .testsGrid{ grid-template-columns: 1fr; }
+}
+
+.tests-bs .editorTitle{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-bottom: 10px;
+}
+.tests-bs .editorTitle h3{
+  margin:0;
+  font-size: 16px;
+  font-weight: 1000;
+}
+
+.tests-bs .optionRow{
+  display:flex;
+  gap:10px;
+  align-items:center;
+  flex-wrap:wrap;
+  padding: 8px;
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: var(--radius);
+  background: rgba(17,24,39,0.015);
+  cursor: pointer;
+}
+
+.tests-bs .optionRow[data-correct="1"]{
+  border-color: rgba(47,109,246,0.55);
+  background: rgba(47,109,246,0.06);
+  box-shadow: 0 0 0 4px var(--focus);
+}
+
+.tests-bs .optionRow[data-correct="1"] .form-check-label{
+  color: var(--text);
+  font-weight: 900;
+}
+
+.tests-bs .correctPill{
+  display:none;
+  margin-left:6px;
+  padding:4px 8px;
+  border-radius:999px;
+  border:1px solid rgba(47,109,246,0.35);
+  background: rgba(47,109,246,0.10);
+  color: var(--btnText);
+  font-size: 12px;
+  font-weight: 900;
+  line-height: 1;
+}
+.tests-bs .optionRow[data-correct="1"] .correctPill{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+}
+
+.tests-bs .optionRow:has(input.optionCorrect:focus-visible){
+  outline: 3px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.tests-bs .optionRow .input-group-text{
+  font-weight: 900;
+}
+
+.tests-bs .optionRow .input-group{
+  min-width: 320px;
+}
+
+.tests-bs .optionRow .form-check{
+  min-width: 120px;
+  justify-content:flex-start;
+}
+
+/* Right-side list */
+.tests-bs .qListHint{
+  font-size: 12px;
+  color: var(--muted);
+}
+.tests-bs .qCard{
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: var(--radius);
+  padding: 12px;
+  background:#fff;
+}
+.tests-bs .qCard:hover{
+  border-color: rgba(17,24,39,0.16);
+}
+.tests-bs .qCardTitle{
+  font-weight: 1000;
+  color: var(--text);
+  margin-top: 4px;
+}
+.tests-bs .qActions{
+  display:flex;
+  gap:8px;
+  align-items:center;
+  flex-wrap:wrap;
+  justify-content:flex-end;
+}
+.tests-bs .qPreview{
+  margin-top: 10px;
+  display:grid;
+  gap:2px;
+}
+
+/* Make embedded iframe pages breathe */
+html.embed .tests-bs .wrap,
+body.embed.tests-bs .wrap{
+  padding: 0;
+}

@@ -177,9 +177,6 @@ function renderSpeakingSlots() {
       ? `${location.origin}/speaking.html?token=${encodeURIComponent(String(r.sessionToken || ""))}`
       : "");
     const gateUrl = escapeHtml(gateUrlRaw);
-    const shortLink = gateUrlRaw
-      ? escapeHtml(gateUrlRaw.length > 34 ? `${gateUrlRaw.slice(0, 34)}...` : gateUrlRaw)
-      : "-";
     const startValue = Number.isFinite(Number(r.startUtcMs)) ? toDatetimeLocalValue(Number(r.startUtcMs)) : "";
 
     return `
@@ -199,9 +196,9 @@ function renderSpeakingSlots() {
         </td>
         <td>${candidate}</td>
         <td>${examiner || "-"}</td>
-        <td>${gateUrlRaw ? `<a href="${gateUrl}" target="_blank" rel="noopener" class="mono">${shortLink}</a>` : "-"}</td>
+        <td>${gateUrlRaw ? `<a href="${gateUrl}" target="_blank" rel="noopener" class="mono">Open</a>` : "-"}</td>
         <td>
-          <button class="btn speaking-show-zoom-btn" data-slot-id="${id}" type="button" style="width:auto; min-width:92px;">Show</button>
+          <button class="btn speaking-show-meeting-btn" data-slot-id="${id}" type="button" style="width:auto; min-width:92px;">Show</button>
         </td>
       </tr>
     `;
@@ -223,17 +220,22 @@ async function loadSpeakingSlots() {
 async function autoGenerateSpeakingSlots(examPeriodId) {
   const ep = Number(examPeriodId);
   if (!Number.isFinite(ep) || ep <= 0) return { created: 0, skipped: 0 };
-  const r = await fetch("/api/admin/speaking-slots/auto-generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ examPeriodId: ep }),
-  });
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    throw new Error(j.error || `HTTP ${r.status}`);
+  showAdminBusy("Auto-generating speaking slots. Please wait...");
+  try {
+    const r = await fetch("/api/admin/speaking-slots/auto-generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ examPeriodId: ep }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    return r.json();
+  } finally {
+    hideAdminBusy();
   }
-  return r.json();
 }
 
 async function saveSpeakingSlotDateTime(slotId) {
@@ -243,19 +245,24 @@ async function saveSpeakingSlotDateTime(slotId) {
   const startUtcMs = parseDatetimeLocalToMs(startEl?.value || "");
   if (!Number.isFinite(startUtcMs) || startUtcMs <= 0) throw new Error("Invalid date/time");
   const endUtcMs = startUtcMs + (60 * 60 * 1000);
-  const r = await fetch(`/api/admin/speaking-slots/${encodeURIComponent(sid)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ startUtcMs, endUtcMs }),
-  });
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    throw new Error(j.error || `HTTP ${r.status}`);
+  showAdminBusy("Saving speaking slot. Please wait...");
+  try {
+    const r = await fetch(`/api/admin/speaking-slots/${encodeURIComponent(sid)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ startUtcMs, endUtcMs }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    const updated = await r.json();
+    _speakingSlots = (_speakingSlots || []).map((x) => (Number(x.id) === sid ? updated : x));
+    renderSpeakingSlots();
+  } finally {
+    hideAdminBusy();
   }
-  const updated = await r.json();
-  _speakingSlots = (_speakingSlots || []).map((x) => (Number(x.id) === sid ? updated : x));
-  renderSpeakingSlots();
 }
 
 function showAdminBusy(message) {
@@ -367,6 +374,7 @@ elCreate.addEventListener("click", async () => {
 });
 
 elDelete.addEventListener("click", async () => {
+  let didBusy = false;
   try {
     elDelete.disabled = true;
     elCfgOut.innerHTML = "";
@@ -374,9 +382,11 @@ elDelete.addEventListener("click", async () => {
     const id = getSelectedExamPeriodId();
     const p = getPeriodById(id);
     const label = String(p?.name || "").trim() || `Exam period ${id}`;
-    const ok = await uiConfirm(`Delete "${label}" (ID ${id}) and all its sessions?`, { title: "Delete Exam Period" });
+    const ok = await uiConfirm(`Delete "${label}" (ID ${id}) and all its sessions?`, { title: "Delete Exam Period", yesText: "Delete", noText: "Cancel", danger: true });
     if (!ok) return;
 
+    showAdminBusy("Deleting exam period. Please wait...");
+    didBusy = true;
     const r = await fetch(`/api/admin/exam-periods/${encodeURIComponent(id)}`, {
       method: "DELETE",
       credentials: "same-origin",
@@ -391,11 +401,13 @@ elDelete.addEventListener("click", async () => {
   } catch (e) {
     elCfgOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
   } finally {
+    try { if (didBusy) hideAdminBusy(); } catch {}
     elDelete.disabled = false;
   }
 });
 
 elSave.addEventListener("click", async () => {
+  let didBusy = false;
   try {
     elSave.disabled = true;
     elCfgOut.innerHTML = "";
@@ -410,6 +422,8 @@ elSave.addEventListener("click", async () => {
     const durMinutes = Number(elDurMin.value || 0);
     if (!Number.isFinite(durMinutes) || durMinutes <= 0) throw new Error("Invalid duration");
 
+    showAdminBusy("Saving exam period. Please wait...");
+    didBusy = true;
     const r = await fetch(`/api/admin/exam-periods/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
@@ -426,6 +440,7 @@ elSave.addEventListener("click", async () => {
   } catch (e) {
     elCfgOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
   } finally {
+    try { if (didBusy) hideAdminBusy(); } catch {}
     elSave.disabled = false;
   }
 });
@@ -495,6 +510,10 @@ elImport.addEventListener("click", async () => {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
 
+    const speakingCreated = Number(r.headers.get("X-Speaking-Slots-Created") || 0);
+    const speakingFailed = Number(r.headers.get("X-Speaking-Slots-Failed") || 0);
+    const speakingErr = String(r.headers.get("X-Speaking-Slots-Error") || "").trim();
+
     const blob = await r.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -505,7 +524,10 @@ elImport.addEventListener("click", async () => {
     a.remove();
     URL.revokeObjectURL(url);
 
-    elOut.innerHTML = `<span class="ok">Done. Download started.</span>`;
+    const speakingNote = (speakingCreated > 0 || speakingFailed > 0 || speakingErr)
+      ? ` Speaking slots: created ${Math.max(0, speakingCreated)}, failed ${Math.max(0, speakingFailed)}.${speakingErr ? ` Error: ${escapeHtml(speakingErr)}` : ""}`
+      : "";
+    elOut.innerHTML = `<span class="ok">Done. Download started.</span>${speakingNote ? `<br><span class="${speakingFailed > 0 || speakingErr ? "bad" : "ok"}">${speakingNote}</span>` : ""}`;
   } catch (e) {
     elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
   } finally {
@@ -568,23 +590,23 @@ if (elSpeakingSlotsBody) {
       return;
     }
 
-    const showZoomBtn = target.closest(".speaking-show-zoom-btn");
-    if (showZoomBtn) {
-      const slotId = Number(showZoomBtn.getAttribute("data-slot-id") || 0);
+    const showMeetingBtn = target.closest(".speaking-show-meeting-btn");
+    if (showMeetingBtn) {
+      const slotId = Number(showMeetingBtn.getAttribute("data-slot-id") || 0);
       const row = (_speakingSlots || []).find((x) => Number(x.id) === slotId);
-      const zoomUrl = String(row?.joinUrl || "").trim();
-      if (!zoomUrl) {
-        if (elSpeakingSlotsOut) elSpeakingSlotsOut.innerHTML = `<span class="bad">No Zoom URL found for slot ${slotId}.</span>`;
+      const meetingUrl = String(row?.joinUrl || "").trim();
+      if (!meetingUrl) {
+        if (elSpeakingSlotsOut) elSpeakingSlotsOut.innerHTML = `<span class="bad">No meeting URL found for slot ${slotId}.</span>`;
         return;
       }
       try {
-        await navigator.clipboard.writeText(zoomUrl);
+        await navigator.clipboard.writeText(meetingUrl);
         if (elSpeakingSlotsOut) {
-          elSpeakingSlotsOut.innerHTML = `<span class="ok">Zoom URL copied for slot ${slotId}.</span><br><a class="mono" href="${escapeHtml(zoomUrl)}" target="_blank" rel="noopener">${escapeHtml(zoomUrl)}</a>`;
+          elSpeakingSlotsOut.innerHTML = `<span class="ok">Meeting URL copied for slot ${slotId}.</span><br><a class="mono" href="${escapeHtml(meetingUrl)}" target="_blank" rel="noopener">${escapeHtml(meetingUrl)}</a>`;
         }
       } catch {
         if (elSpeakingSlotsOut) {
-          elSpeakingSlotsOut.innerHTML = `<span class="ok">Zoom URL for slot ${slotId}:</span><br><a class="mono" href="${escapeHtml(zoomUrl)}" target="_blank" rel="noopener">${escapeHtml(zoomUrl)}</a>`;
+          elSpeakingSlotsOut.innerHTML = `<span class="ok">Meeting URL for slot ${slotId}:</span><br><a class="mono" href="${escapeHtml(meetingUrl)}" target="_blank" rel="noopener">${escapeHtml(meetingUrl)}</a>`;
         }
       }
       return;
@@ -625,7 +647,16 @@ if (elCreateSingle) {
       if (elSingleOut) {
         const status = out?.reused ? "Existing candidate/session reused." : "Candidate created.";
         const link = String(out?.url || "").trim();
-        elSingleOut.innerHTML = `<span class="ok">${escapeHtml(status)}</span><br><a class="mono" href="${escapeHtml(link)}" target="_blank" rel="noopener">${escapeHtml(link)}</a>`;
+        const speakingLink = String(out?.speakingUrl || "").trim();
+        const speakingErr = String(out?.speakingAutoError || "").trim();
+        const speakingLine = speakingLink
+          ? `<br>Speaking: <a class="mono" href="${escapeHtml(speakingLink)}" target="_blank" rel="noopener">Open</a>`
+          : "";
+        const errLine = speakingErr ? `<br><span class="bad">Speaking link auto-generation failed: ${escapeHtml(speakingErr)}</span>` : "";
+        const examLine = link
+          ? `<a class="mono" href="${escapeHtml(link)}" target="_blank" rel="noopener">Open</a>`
+          : `<span class="muted">-</span>`;
+        elSingleOut.innerHTML = `<span class="ok">${escapeHtml(status)}</span><br>Exam: ${examLine}${speakingLine}${errLine}`;
       }
     } catch (e) {
       if (elSingleOut) {

@@ -18,6 +18,7 @@ const elSwitchExaminer = qs("#switchExaminer");
 
 let allRows = [];
 let allPeriods = [];
+let speakingBySession = new Map();
 let filtered = [];
 let page = 1;
 const PAGE_SIZE = 16;
@@ -37,7 +38,7 @@ function scheduleApply() {
       isApplying = true;
       applyFilters(false);
     } catch (e) {
-      elTbody.innerHTML = `<tr><td colspan="5" class="bad">Search error: ${escapeHtml(e?.message || String(e))}</td></tr>`;
+      elTbody.innerHTML = `<tr><td colspan="7" class="bad">Search error: ${escapeHtml(e?.message || String(e))}</td></tr>`;
     } finally {
       isApplying = false;
       if (pendingApply) {
@@ -64,6 +65,71 @@ function escapeHtml(s) {
 
 function submittedFmt(submitted) {
   return submitted ? '<span class="ok">Yes</span>' : '<span class="muted">No</span>';
+}
+
+function formatLocalDateTime(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  try {
+    return new Date(n).toLocaleString(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return "";
+  }
+}
+
+function chooseBestSpeakingSlot(slots) {
+  const now = Date.now();
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const s of slots || []) {
+    const start = Number(s?.startUtcMs || 0);
+    const end = Number(s?.endUtcMs || 0);
+    if (!Number.isFinite(start) || start <= 0) continue;
+    const inWindow = Number.isFinite(end) && end > start && now >= start && now <= end;
+    const dist = inWindow ? 0 : Math.abs(start - now);
+    if (!best || dist < bestScore) {
+      best = s;
+      bestScore = dist;
+    }
+  }
+  return best;
+}
+
+function rebuildSpeakingIndex(slots) {
+  const groups = new Map();
+  for (const s of (Array.isArray(slots) ? slots : [])) {
+    const sid = Number(s?.sessionId || 0);
+    if (!Number.isFinite(sid) || sid <= 0) continue;
+    if (!groups.has(sid)) groups.set(sid, []);
+    groups.get(sid).push(s);
+  }
+  const idx = new Map();
+  for (const [sid, list] of groups.entries()) {
+    const chosen = chooseBestSpeakingSlot(list);
+    if (chosen) idx.set(sid, chosen);
+  }
+  speakingBySession = idx;
+}
+
+function mergeRowsWithSpeaking(rows) {
+  const src = Array.isArray(rows) ? rows : [];
+  return src.map((r) => {
+    const sid = Number(r?.sessionId || 0);
+    const s = speakingBySession.get(sid);
+    return {
+      ...r,
+      speakingStartUtcMs: Number(s?.startUtcMs || 0) || null,
+      speakingJoinUrl: String(s?.joinUrl || "").trim(),
+      speakingGateUrl: String(s?.speakingUrl || "").trim(),
+    };
+  });
 }
 
 function applySort(rows) {
@@ -175,7 +241,7 @@ function render() {
   const slice = filtered.slice(start, start + PAGE_SIZE);
 
   if (!slice.length) {
-    elTbody.innerHTML = `<tr><td colspan="5" class="muted">No results</td></tr>`;
+    elTbody.innerHTML = `<tr><td colspan="7" class="muted">No results</td></tr>`;
   } else {
     elTbody.innerHTML = slice
       .map((r) => {
@@ -183,10 +249,19 @@ function render() {
         const idLabel = `S-${String(id).padStart(6, "0")}`;
         const isDisq = !!r.disqualified;
         const lockAttr = (r.submitted && !isDisq) ? "" : "disabled";
+        const speakingTime = formatLocalDateTime(r.speakingStartUtcMs);
+        const meetingUrl = String(r.speakingJoinUrl || "").trim();
+        const gateUrl = String(r.speakingGateUrl || "").trim();
+        const linkUrl = gateUrl || meetingUrl;
+        const linkHtml = linkUrl
+          ? `<a class="mono" href="${escapeHtml(linkUrl)}" target="_blank" rel="noopener">Open</a>`
+          : `<span class="muted">-</span>`;
         return `
           <tr>
             <td><span class="pill mono">${escapeHtml(idLabel)}</span></td>
             <!-- <td>${submittedFmt(!!r.submitted)}</td> -->
+            <td><span class="mono">${escapeHtml(speakingTime || "-")}</span></td>
+            <td>${linkHtml}</td>
             <td><pre class="writingBox">${escapeHtml(r.qWriting || "")}</pre></td>
             <td>
               <input class="miniInput" type="number" min="1" max="100" step="1" value="${escapeHtml(String(isDisq ? 0 : (r.writingGrade ?? "")))}" data-role="writing" data-sid="${id}" ${lockAttr} />
@@ -322,12 +397,14 @@ elTbody.addEventListener("click", async (ev) => {
 });
 
 async function load() {
-  elTbody.innerHTML = `<tr><td colspan="5" class="muted">Loading...</td></tr>`;
-  const [rows, periods] = await Promise.all([
+  elTbody.innerHTML = `<tr><td colspan="7" class="muted">Loading...</td></tr>`;
+  const [rows, periods, speaking] = await Promise.all([
     apiGet("/api/examiner/candidates"),
     apiGet("/api/examiner/exam-periods").catch(() => []),
+    apiGet("/api/examiner/speaking-slots?limit=50000").catch(() => []),
   ]);
-  allRows = Array.isArray(rows) ? rows : [];
+  rebuildSpeakingIndex(speaking);
+  allRows = mergeRowsWithSpeaking(rows);
   allPeriods = Array.isArray(periods) ? periods : [];
   rebuildExamPeriodOptions();
   applyFilters(false);
@@ -335,28 +412,33 @@ async function load() {
 
 async function autoRefresh() {
   try {
-    const [fresh, periods] = await Promise.all([
+    const [fresh, periods, speaking] = await Promise.all([
       apiGet("/api/examiner/candidates"),
       apiGet("/api/examiner/exam-periods").catch(() => []),
+      apiGet("/api/examiner/speaking-slots?limit=50000").catch(() => []),
     ]);
     if (!Array.isArray(fresh)) return;
+    rebuildSpeakingIndex(speaking);
+    const mergedFresh = mergeRowsWithSpeaking(fresh);
     let changed = false;
 
-    if (!Array.isArray(allRows) || fresh.length !== allRows.length || fresh[0]?.sessionId !== allRows[0]?.sessionId) {
+    if (!Array.isArray(allRows) || mergedFresh.length !== allRows.length || mergedFresh[0]?.sessionId !== allRows[0]?.sessionId) {
       changed = true;
     } else {
       // Detect in-place changes (e.g. grades) without forcing a full page refresh.
       // Compare a small window from the top; this covers the typical "recent" view and keeps it cheap.
-      const N = Math.min(200, fresh.length);
+      const N = Math.min(200, mergedFresh.length);
       for (let i = 0; i < N; i++) {
         const a = allRows[i];
-        const b = fresh[i];
+        const b = mergedFresh[i];
         if (!a || !b) { changed = true; break; }
         if (
           Number(a.sessionId) !== Number(b.sessionId) ||
           (a.speakingGrade ?? null) !== (b.speakingGrade ?? null) ||
           (a.writingGrade ?? null) !== (b.writingGrade ?? null) ||
-          String(a.qWriting ?? "") !== String(b.qWriting ?? "")
+          String(a.qWriting ?? "") !== String(b.qWriting ?? "") ||
+          Number(a.speakingStartUtcMs || 0) !== Number(b.speakingStartUtcMs || 0) ||
+          String(a.speakingJoinUrl || "") !== String(b.speakingJoinUrl || "")
         ) {
           changed = true;
           break;
@@ -381,7 +463,7 @@ async function autoRefresh() {
     }
 
     if (changed) {
-      allRows = fresh;
+      allRows = mergedFresh;
       allPeriods = newPeriods;
       rebuildExamPeriodOptions();
       applyFilters(false);
@@ -419,5 +501,5 @@ elNext.addEventListener("click", () => {
 });
 
 load().catch((e) => {
-  elTbody.innerHTML = `<tr><td colspan="6" class="bad">Failed to load: ${escapeHtml(e?.message || String(e))}</td></tr>`;
+  elTbody.innerHTML = `<tr><td colspan="7" class="bad">Failed to load: ${escapeHtml(e?.message || String(e))}</td></tr>`;
 });

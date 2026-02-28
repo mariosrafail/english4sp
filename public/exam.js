@@ -21,6 +21,20 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   const elFaceHint = qs("#faceHint");
   const elCamSelect = qs("#camSelect");
   const elRefreshCams = qs("#refreshCams");
+  const elCameraCheckText = qs("#cameraCheckText");
+
+  // Proctoring notice + acknowledgement (GDPR notice on candidate link)
+  const elProctoringNoticeText = qs("#proctoringNoticeText");
+  const elProctoringMeta = qs("#proctoringMeta");
+  const elProctoringController = qs("#proctoringController");
+  const elProctoringRetention = qs("#proctoringRetention");
+  const elProctoringPrivacyLink = qs("#proctoringPrivacyLink");
+  const elProctoringReadMore = qs("#proctoringReadMore");
+  const elProctoringLongNotice = qs("#proctoringLongNotice");
+  const elProctoringControllerLong = qs("#proctoringControllerLong");
+  const elProctoringRetentionLong = qs("#proctoringRetentionLong");
+  const elProctoringAck = qs("#proctoringAck");
+  const elProctoringAckLabel = qs("#proctoringAckLabel");
 
   // Mini camera preview (during exam)
   const elCamMini = qs("#camMini");
@@ -46,6 +60,19 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     return fmt.format(d);
   }
 
+  function richTextHtml(raw){
+    const src = String(raw || "");
+    const parts = src.split("**");
+    // Unbalanced markers -> treat literally.
+    if (parts.length < 3 || parts.length % 2 === 0) return escapeHtml(src).replace(/\r?\n/g, "<br>");
+    let out = "";
+    for (let i = 0; i < parts.length; i++){
+      const seg = escapeHtml(parts[i]).replace(/\r?\n/g, "<br>");
+      out += (i % 2 === 1) ? `<b>${seg}</b>` : seg;
+    }
+    return out;
+  }
+
   function showStatus(text, cls){
     elStatus.style.display = "block";
     elStatus.textContent = text;
@@ -54,6 +81,164 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   function showGateNotice(text, cls){
     elGateNotice.textContent = text;
     elGateNotice.className = "notice " + (cls || "");
+  }
+
+  function applyProctoringConfig(cfg) {
+    const c = cfg && typeof cfg === "object" ? cfg : {};
+
+    const modeRaw = String(c.mode || "").trim().toLowerCase();
+    proctoringMode = (modeRaw === "recording" || modeRaw === "record") ? "recording" : "presence";
+
+    const requireAckRaw = c.requireAck;
+    proctoringAckRequired = requireAckRaw === undefined ? true : !!requireAckRaw;
+
+    const v = String(c.noticeVersion || "").trim();
+    if (v) proctoringNoticeVersion = v;
+
+    const controllerName = String(c.controllerName || "").trim() || "the educational organization running this exam";
+    const retentionDaysNum = Number(c.retentionDays || 0);
+    const retentionDays = Number.isFinite(retentionDaysNum) && retentionDaysNum > 0 ? Math.round(retentionDaysNum) : 30;
+    const privacyUrl = String(c.privacyNoticeUrl || "").trim();
+
+    if (elProctoringController) elProctoringController.textContent = `Data controller: ${controllerName}. `;
+    if (elProctoringRetention) elProctoringRetention.textContent = `Retention: up to ${retentionDays} days. `;
+    if (elProctoringControllerLong) elProctoringControllerLong.textContent = controllerName;
+    if (elProctoringRetentionLong) elProctoringRetentionLong.textContent = String(retentionDays);
+
+    if (elProctoringPrivacyLink) {
+      if (privacyUrl) {
+        elProctoringPrivacyLink.href = privacyUrl;
+        elProctoringPrivacyLink.style.display = "inline";
+      } else {
+        elProctoringPrivacyLink.style.display = "none";
+      }
+    }
+
+    if (elProctoringNoticeText) {
+      if (proctoringMode === "recording") {
+        elProctoringNoticeText.textContent =
+          "During this exam, we will record video and capture periodic photos using your device camera for invigilation and identity verification (human review).";
+      } else {
+        elProctoringNoticeText.textContent =
+          "During this exam, your device camera will be used to monitor your presence and verify your identity (human review). This exam uses camera presence checks and proctoring event logs (no stored video recording).";
+      }
+    }
+
+    if (elCameraCheckText) {
+      elCameraCheckText.textContent =
+        proctoringMode === "recording"
+          ? "Camera access is required to start the exam. Keep your face visible. Video and periodic photos may be captured for review."
+          : "Camera access is required to start the exam. The system checks that your face is visible.";
+    }
+
+    if (!proctoringAckRequired) {
+      try { if (elProctoringAckLabel) elProctoringAckLabel.style.display = "none"; } catch {}
+      try { if (elProctoringMeta) elProctoringMeta.style.display = "none"; } catch {}
+      try { if (elProctoringAck) { elProctoringAck.checked = true; elProctoringAck.disabled = true; } } catch {}
+    }
+  }
+
+  function isProctoringAckSatisfied() {
+    if (!proctoringAckRequired) return true;
+    if (proctoringAckedServer) return true;
+    return !!(elProctoringAck && elProctoringAck.checked);
+  }
+
+  async function ensureProctoringAckRecorded() {
+    if (!proctoringAckRequired) return;
+    if (proctoringAckedServer) return;
+    if (!elProctoringAck || !elProctoringAck.checked) throw new Error("Please acknowledge the Remote Proctoring Notice to start the exam.");
+    await apiPost(`/api/session/${encodeURIComponent(token)}/proctoring-ack`, { noticeVersion: proctoringNoticeVersion });
+    proctoringAckedServer = true;
+    try { elProctoringAck.disabled = true; } catch {}
+  }
+
+  function pickSnapshotVideoEl() {
+    if (elVideoMini && elVideoMini.srcObject) return elVideoMini;
+    if (elVideo && elVideo.srcObject) return elVideo;
+    return null;
+  }
+
+  async function captureAndUploadSnapshot(reason) {
+    if (snapshotInFlight) return;
+    if (snapshotsTaken >= MAX_SNAPSHOTS) return;
+
+    const now = Date.now();
+    if (lastSnapshotAt && (now - lastSnapshotAt) < 700) return;
+
+    const r0 = String(reason || "unknown").trim() || "unknown";
+    const titlePrefix = (()=>{
+      const r = r0.toLowerCase();
+      if (r === "exam_start") return "START_EXAM";
+      if (r.includes("fullscreen")) return "EXIT_FULLSCREEN";
+      if (r.includes("face") || r.includes("camera")) return "FACE_NOTONCAMERA";
+      if (
+        r.includes("tab_") ||
+        r.includes("window_") ||
+        r.includes("pointer_") ||
+        r.includes("nav_") ||
+        r.includes("focus")
+      ) return "CHANGED_WINDOW";
+      return "SNAPSHOT";
+    })();
+
+    const stamp = (()=>{
+      const d = new Date();
+      const HH = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      const ss = String(d.getSeconds()).padStart(2, "0");
+      const DD = String(d.getDate()).padStart(2, "0");
+      const MM = String(d.getMonth() + 1).padStart(2, "0");
+      const YYYY = String(d.getFullYear());
+      return `${HH}${mm}${ss}_${DD}${MM}_${YYYY}`;
+    })();
+
+    const videoEl = pickSnapshotVideoEl();
+    if (!videoEl) return;
+    const vw = Number(videoEl.videoWidth || 0);
+    const vh = Number(videoEl.videoHeight || 0);
+    if (!vw || !vh) return;
+
+    snapshotInFlight = true;
+    lastSnapshotAt = now;
+    try {
+      const canvas = document.createElement("canvas");
+      const maxW = 640;
+      const scale = vw > maxW ? (maxW / vw) : 1;
+      const tw = Math.max(1, Math.round(vw * scale));
+      const th = Math.max(1, Math.round(vh * scale));
+      canvas.width = tw;
+      canvas.height = th;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return;
+      ctx.drawImage(videoEl, 0, 0, tw, th);
+
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      if (!blob) return;
+
+      const fd = new FormData();
+      fd.append("reason", r0);
+      fd.append("titlePrefix", titlePrefix);
+      fd.append("stamp", stamp);
+      fd.append("image", blob, "snapshot.png");
+
+      const r = await fetch(`/api/session/${encodeURIComponent(token)}/snapshot`, {
+        method: "POST",
+        body: fd,
+        credentials: "same-origin",
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (r.status === 429 || j?.error === "snapshot_limit_reached") snapshotsTaken = MAX_SNAPSHOTS;
+        return;
+      }
+
+      const c = Number(j?.count || 0);
+      snapshotsTaken = Number.isFinite(c) && c > 0 ? c : (snapshotsTaken + 1);
+    } catch {}
+    finally {
+      snapshotInFlight = false;
+    }
   }
 
   function showFinalScreen(disqualified){
@@ -98,6 +283,14 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
   // Security / proctoring state
   let examStarted = false;
+  let proctoringAckedServer = false;
+  let proctoringAckRequired = true;
+  let proctoringNoticeVersion = "2026-02-26_v1";
+  let proctoringMode = "presence"; // presence | recording
+  let snapshotsTaken = 0;
+  const MAX_SNAPSHOTS = 10;
+  let snapshotInFlight = false;
+  let lastSnapshotAt = 0;
   let antiResetArmed = false;
   let tabViolations = Number(localStorage.getItem(LS_KEY("tabViolations")) || "0");
   // Face violations must be scoped to the current attempt only.
@@ -189,7 +382,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     // Heuristic for F11 fullscreen: viewport approximately equals screen size.
     // Use a small tolerance to account for device pixel ratios and OS UI.
     // Tolerance must be generous because F11 fullscreen can differ by a few px
-    // depending on OS UI, zoom, and device pixel ratio.
+    // depending on OS UI, browser scale, and device pixel ratio.
     const tol = 10;
     const w = window.innerWidth;
     const h = window.innerHeight;
@@ -373,6 +566,15 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       r.checked = (Number(r.value) === shuffledIdx);
     });
 
+    // Ensure selected styling is applied even in browsers without :has()
+    qsa(".q").forEach((q)=>{
+      const choices = Array.from(q.querySelectorAll(".choice") || []);
+      for (const c of choices){
+        const i = c.querySelector("input[type=radio]");
+        c.classList.toggle("selected", !!i && i.checked);
+      }
+    });
+
     // Textareas
     qsa("textarea").forEach((t)=>{
       if (!t.name) return;
@@ -537,6 +739,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       tabViolations++;
       localStorage.setItem(LS_KEY("tabViolations"), String(tabViolations));
       await pingPresence("nav_back_blocked");
+      void captureAndUploadSnapshot("nav_back_blocked");
       showTabToast(
         "Back navigation is disabled during the exam.",
         `Violations: ${tabViolations}/${MAX_TAB_VIOLATIONS}`,
@@ -591,6 +794,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       if (document.hidden){
         lastHiddenAt = Date.now();
         await pingPresence("tab_hidden");
+        void captureAndUploadSnapshot("tab_hidden");
       }else{
         const awayMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
         lastHiddenAt = 0;
@@ -603,6 +807,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       if (!examStarted) return;
       lastBlurAt = Date.now();
       await pingPresence("window_blur");
+      void captureAndUploadSnapshot("window_blur");
     });
     window.addEventListener("focus", async ()=>{
       if (!examStarted) return;
@@ -641,6 +846,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         tabViolations++;
         localStorage.setItem(LS_KEY("tabViolations"), String(tabViolations));
         try{ await pingPresence("pointer_left"); }catch(e){}
+        void captureAndUploadSnapshot("pointer_left");
 
         showTabToast(
           "Keep your mouse inside the exam window.",
@@ -777,20 +983,23 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           if (!faceOkSince) faceOkSince = nowMs();
           const stableMs = nowMs() - faceOkSince;
 
-          const ratioOk = ratio >= 0.04;
-
-          const fsOk = isFullscreen();
-          if (stableMs >= 2000 && ratioOk && fsOk){
-            elStartExam.disabled = false;
-            showGateNotice("Checks passed. You can start the exam.", "ok");
-          }else{
-            elStartExam.disabled = true;
-            if (!fsOk){
-              showGateNotice("Please enter fullscreen to start the exam.", "bad");
-            }else{
-              showGateNotice("Hold still. Keep your face closer to the camera.", "");
-            }
-          }
+           const ratioOk = ratio >= 0.04;
+ 
+           const fsOk = isFullscreen();
+          const ackOk = isProctoringAckSatisfied();
+          if (stableMs >= 2000 && ratioOk && fsOk && ackOk){
+             elStartExam.disabled = false;
+             showGateNotice("Checks passed. You can start the exam.", "ok");
+           }else{
+             elStartExam.disabled = true;
+            if (!ackOk){
+              showGateNotice("Please acknowledge the Remote Proctoring Notice to start the exam.", "bad");
+            } else if (!fsOk){
+               showGateNotice("Please enter fullscreen to start the exam.", "bad");
+             }else{
+               showGateNotice("Hold still. Keep your face closer to the camera.", "");
+             }
+           }
         }else{
           elFaceOverlay.classList.remove("ok");
           faceOkSince = 0;
@@ -843,6 +1052,9 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     let missingSince = 0;
     let fsMissingSince = 0;
     let lastViolationAt = 0;
+    let camWasOff = false;
+    let fsWasOff = false;
+    let faceWasMissing = false;
 
     // IMPORTANT: after the candidate clicks "Start exam", the gate block is hidden.
     // Many browsers reduce or stop frame updates for videos that are display:none.
@@ -858,6 +1070,10 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       // Fullscreen enforcement during the exam
       const fsOk = isFullscreen();
       if (!fsOk){
+        if (!fsWasOff) {
+          fsWasOff = true;
+          void captureAndUploadSnapshot("fullscreen_off_during_exam");
+        }
         if (!fsMissingSince) fsMissingSince = Date.now();
         const missMs = Date.now() - fsMissingSince;
         const leftS = Math.max(0, Math.ceil((FULLSCREEN_MISSING_AUTO_SUBMIT_MS - missMs) / 1000));
@@ -880,6 +1096,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         }
         return;
       }
+      fsWasOff = false;
       fsMissingSince = 0;
 
       // If we were showing a fullscreen warning, clear it immediately when fullscreen is back.
@@ -893,6 +1110,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       const track = stream?.getVideoTracks?.()[0];
       const camLive = track && track.readyState === "live" && track.enabled !== false;
       if (!camLive){
+        camWasOff = true;
         if (!missingSince) missingSince = Date.now();
         if (elCamMiniText) elCamMiniText.textContent = "Camera off";
         if (elCamMiniDot) elCamMiniDot.classList.remove("ok");
@@ -909,10 +1127,19 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
         if (ok){
           missingSince = 0;
+          faceWasMissing = false;
           if (elCamMiniText) elCamMiniText.textContent = "Face detected";
           if (elCamMiniDot) elCamMiniDot.classList.add("ok");
           hideLock();
+          if (camWasOff){
+            camWasOff = false;
+            void captureAndUploadSnapshot("camera_return");
+          }
           return;
+        }
+        if (!faceWasMissing) {
+          faceWasMissing = true;
+          void captureAndUploadSnapshot("face_missing_during_exam");
         }
 
         if (!missingSince) missingSince = Date.now();
@@ -959,6 +1186,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     for (let secIdx = 0; secIdx < sections.length; secIdx++){
       const sec = sections[secIdx];
       const secKind = getSectionKind(sec);
+      let writingDragId = "";
       const secEl = document.createElement("div");
       secEl.className = "section";
       secEl.innerHTML = `<h2>${escapeHtml(sec.title || "Section")}</h2>`;
@@ -971,12 +1199,186 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
       if (secKind === "writing"){
         const writingItems = Array.isArray(sec.items) ? sec.items : [];
-        const gapIds = ["w1", "w2", "w3", "w4"];
+        let rendered = false;
+        const dragCfg = writingItems.find((it)=> it && String(it.type || "") === "drag-words" && String(it.text || "").trim());
+        if (dragCfg && /\*\*[^*]+?\*\*/.test(String(dragCfg.text || ""))){
+          writingDragId = String(dragCfg.id || "drag1") || "drag1";
+          const rawText = String(dragCfg.text || "");
+          const rawExtras = String(dragCfg.extraWords || "");
+
+          const gapWords = [];
+          rawText.replace(/\*\*([^*]+?)\*\*/g, (_, w)=> { gapWords.push(String(w || "").trim()); return ""; });
+          const extraWords = [];
+          rawExtras.replace(/\*([^*]+?)\*/g, (_, w)=> { extraWords.push(String(w || "").trim()); return ""; });
+
+          const uniq = (arr)=>{
+            const out = [];
+            const seen = new Set();
+            for (const x of arr || []){
+              const v = String(x || "").trim();
+              if (!v) continue;
+              const k = v.toLowerCase();
+              if (seen.has(k)) continue;
+              seen.add(k);
+              out.push(v);
+            }
+            return out;
+          };
+          const bankWords = Array.isArray(dragCfg.bankWords) && dragCfg.bankWords.length
+            ? uniq(dragCfg.bankWords)
+            : uniq([...gapWords, ...extraWords]);
+
+          if (gapWords.length && bankWords.length){
+            const choiceIndexByWord = new Map(bankWords.map((w, i)=> [String(w).toLowerCase(), i]));
+
+            const gapCard = document.createElement("div");
+            gapCard.className = "q";
+
+            const gapTitle = document.createElement("div");
+            gapTitle.className = "q-title";
+            gapTitle.textContent = String(dragCfg.title || "Task 1: Drag the correct words into the gaps.");
+            gapCard.appendChild(gapTitle);
+
+            if (String(dragCfg.instructions || "").trim()){
+              const inst = document.createElement("div");
+              inst.className = "small";
+              inst.style.whiteSpace = "pre-wrap";
+              inst.style.marginTop = "6px";
+              inst.textContent = String(dragCfg.instructions || "");
+              gapCard.appendChild(inst);
+            }
+
+            const gapText = document.createElement("div");
+            gapText.style.lineHeight = "1.8";
+            gapText.style.marginTop = "8px";
+            gapText.style.whiteSpace = "pre-wrap";
+
+            const choiceValuesJson = (()=>{
+              try { return JSON.stringify(bankWords); } catch { return "[]"; }
+            })();
+
+            const rx = /\*\*([^*]+?)\*\*/g;
+            let last = 0;
+            let idx = 0;
+            let m;
+            while ((m = rx.exec(rawText))){
+              gapText.appendChild(document.createTextNode(rawText.slice(last, m.index)));
+              idx += 1;
+              const gap = document.createElement("span");
+              gap.className = "gap-blank";
+              gap.dataset.index = String(idx);
+              gap.dataset.qid = `${writingDragId}_g${idx}`;
+              gap.dataset.choiceValues = choiceValuesJson;
+              gap.textContent = `(${idx})`;
+              gapText.appendChild(gap);
+              last = m.index + m[0].length;
+            }
+            gapText.appendChild(document.createTextNode(rawText.slice(last)));
+            gapCard.appendChild(gapText);
+
+            const bankTitle = document.createElement("div");
+            bankTitle.className = "small";
+            bankTitle.style.marginTop = "10px";
+            bankTitle.textContent = "Word bank:";
+            gapCard.appendChild(bankTitle);
+
+            const bank = document.createElement("div");
+            bank.className = "word-bank";
+            bank.style.display = "flex";
+            bank.style.flexWrap = "wrap";
+            bank.style.gap = "8px";
+            bank.style.marginTop = "8px";
+
+            for (const word of bankWords){
+              const chip = document.createElement("button");
+              chip.type = "button";
+              chip.className = "word-chip";
+              chip.draggable = true;
+              chip.dataset.word = word;
+              chip.textContent = word;
+              bank.appendChild(chip);
+            }
+            gapCard.appendChild(bank);
+
+            const tip = document.createElement("div");
+            tip.className = "small";
+            tip.style.marginTop = "8px";
+            tip.textContent = "Tip: double-click a gap to clear it.";
+            gapCard.appendChild(tip);
+
+            secEl.appendChild(gapCard);
+
+            const gaps = [...gapCard.querySelectorAll(".gap-blank[data-qid]")];
+            const chips = [...gapCard.querySelectorAll(".word-chip")];
+            let draggedChip = null;
+
+            const clearGap = (gap)=>{
+              const prevWord = String(gap.dataset.word || "");
+              if (prevWord){
+                const prevChip = chips.find((ch)=> String(ch.dataset.word || "") === prevWord);
+                if (prevChip) prevChip.classList.remove("in-gap");
+              }
+              gap.textContent = `(${gap.dataset.index || ""})`;
+              gap.dataset.word = "";
+              gap.dataset.choiceIndex = "";
+              gap.classList.remove("filled");
+            };
+
+            chips.forEach((chip)=>{
+              chip.addEventListener("dragstart", (e)=>{
+                draggedChip = chip;
+                chip.classList.add("dragging");
+                if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+              });
+              chip.addEventListener("dragend", ()=>{
+                draggedChip = null;
+                chip.classList.remove("dragging");
+              });
+            });
+
+            gaps.forEach((gap)=>{
+              gap.addEventListener("dragover", (e)=>{
+                e.preventDefault();
+                gap.classList.add("drag-over");
+              });
+              gap.addEventListener("dragleave", ()=> gap.classList.remove("drag-over"));
+              gap.addEventListener("drop", (e)=>{
+                e.preventDefault();
+                gap.classList.remove("drag-over");
+                if (!draggedChip) return;
+
+                const draggedWord = String(draggedChip.dataset.word || "");
+                const existingGap = gaps.find((g)=> String(g.dataset.word || "") === draggedWord);
+                if (existingGap && existingGap !== gap) clearGap(existingGap);
+
+                clearGap(gap);
+
+                gap.textContent = draggedWord;
+                gap.dataset.word = draggedWord;
+                gap.dataset.choiceIndex = String(choiceIndexByWord.has(draggedWord.toLowerCase()) ? choiceIndexByWord.get(draggedWord.toLowerCase()) : "");
+                gap.classList.add("filled");
+                draggedChip.classList.add("in-gap");
+                saveAnswers();
+              });
+              gap.addEventListener("dblclick", ()=>{
+                clearGap(gap);
+                saveAnswers();
+              });
+            });
+
+            rendered = true;
+          }
+        }
+
+        if (!rendered){
+          const gapIds = ["w1", "w2", "w3", "w4"];
         const gapItems = gapIds
           .map((id)=> writingItems.find((it)=> String(it?.id || "") === id))
           .filter(Boolean);
 
         if (gapItems.length === 4){
+          const titleCfg = writingItems.find((it)=> it && String(it.type || "") === "drag-words" && String(it.title || "").trim());
+          const titleText = String(titleCfg?.title || "Task 1: Drag the correct words into the gaps.");
           const bankWords = Array.isArray(gapItems[0].choices) ? gapItems[0].choices.map((x)=> String(x)) : [];
           const choiceIndexByWord = new Map(bankWords.map((w, i)=> [w, i]));
 
@@ -985,7 +1387,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
           const gapTitle = document.createElement("div");
           gapTitle.className = "q-title";
-          gapTitle.textContent = "Task 1: Drag the correct words into the gaps.";
+          gapTitle.textContent = titleText;
           gapCard.appendChild(gapTitle);
 
           const gapText = document.createElement("div");
@@ -1027,7 +1429,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           const tip = document.createElement("div");
           tip.className = "small";
           tip.style.marginTop = "8px";
-          tip.textContent = "Tip: double-click a gap to clear it.";
+          tip.textContent = "Tip: drag words into gaps. Drag back to the word bank (or double-click a gap) to clear it.";
           gapCard.appendChild(tip);
 
           secEl.appendChild(gapCard);
@@ -1046,13 +1448,33 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             gap.dataset.word = "";
             gap.dataset.choiceIndex = "";
             gap.classList.remove("filled");
+            gap.draggable = false;
+          };
+
+          const setDragImageFromChip = (e, chip)=>{
+            try{
+              if (!e?.dataTransfer || !chip) return;
+              const ghost = chip.cloneNode(true);
+              ghost.style.position = "fixed";
+              ghost.style.left = "-9999px";
+              ghost.style.top = "-9999px";
+              ghost.style.pointerEvents = "none";
+              ghost.classList.add("dragging");
+              document.body.appendChild(ghost);
+              e.dataTransfer.setDragImage(ghost, 16, 16);
+              setTimeout(()=>{ try{ ghost.remove(); }catch(e2){} }, 0);
+            }catch(e2){}
           };
 
           chips.forEach((chip)=>{
             chip.addEventListener("dragstart", (e)=>{
               draggedChip = chip;
               chip.classList.add("dragging");
-              if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+              if (e.dataTransfer){
+                e.dataTransfer.effectAllowed = "move";
+                try{ e.dataTransfer.setData("text/plain", String(chip.dataset.word || "")); }catch(e2){}
+              }
+              setDragImageFromChip(e, chip);
             });
             chip.addEventListener("dragend", ()=>{
               draggedChip = null;
@@ -1060,8 +1482,47 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             });
           });
 
+          // Allow dragging a filled gap back to the word bank.
           gaps.forEach((gap)=>{
             gap.dataset.choiceValues = JSON.stringify(bankWords);
+            gap.addEventListener("dragstart", (e)=>{
+              const w = String(gap.dataset.word || "");
+              if (!w) return;
+              const chip = chips.find((ch)=> String(ch.dataset.word || "") === w) || null;
+              if (!chip) return;
+              draggedChip = chip;
+              chip.classList.add("dragging");
+              if (e.dataTransfer){
+                e.dataTransfer.effectAllowed = "move";
+                try{ e.dataTransfer.setData("text/plain", w); }catch(e2){}
+              }
+              setDragImageFromChip(e, chip);
+            });
+            gap.addEventListener("dragend", ()=>{
+              if (draggedChip) draggedChip.classList.remove("dragging");
+              draggedChip = null;
+            });
+          });
+
+          // Dropping on the bank removes the word from the sentence (returns it).
+          bank.addEventListener("dragover", (e)=>{
+            e.preventDefault();
+            bank.classList.add("bank-over");
+          });
+          bank.addEventListener("dragleave", ()=> bank.classList.remove("bank-over"));
+          bank.addEventListener("drop", (e)=>{
+            e.preventDefault();
+            bank.classList.remove("bank-over");
+            if (!draggedChip) return;
+            const w = String(draggedChip.dataset.word || "");
+            const existingGap = gaps.find((g)=> String(g.dataset.word || "") === w);
+            if (existingGap){
+              clearGap(existingGap);
+              saveAnswers();
+            }
+          });
+
+          gaps.forEach((gap)=>{
             gap.addEventListener("dragover", (e)=>{
               e.preventDefault();
               gap.classList.add("drag-over");
@@ -1083,6 +1544,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
               gap.dataset.word = draggedWord;
               gap.dataset.choiceIndex = String(choiceIndexByWord.has(draggedWord) ? choiceIndexByWord.get(draggedWord) : "");
               gap.classList.add("filled");
+              gap.draggable = true;
               draggedChip.classList.add("in-gap");
               saveAnswers();
             });
@@ -1092,12 +1554,13 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             });
           });
         }
+        }
       }
 
       // Listening section: one shared audio player (as in the original flow).
       if (secKind === "listening"){
-        const firstAudioItem = (sec.items || []).find((it)=> it?.type === "listening-mcq" && it?.audioUrl);
-        if (firstAudioItem?.audioUrl){
+        const firstAudioItem = (sec.items || []).find((it)=> it?.type === "listening-mcq");
+        if (firstAudioItem){
           const maxPlays = (sec.rules && Number(sec.rules.audioPlaysAllowed)) || 1;
           const playKey = LS_KEY(`play_sec_${sec.id || "listening"}`);
           const endedKey = LS_KEY(`play_sec_${sec.id || "listening"}_ended`);
@@ -1108,7 +1571,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           audioWrap.className = "q";
 
           const audio = document.createElement("audio");
-          audio.src = String(firstAudioItem.audioUrl);
+          audio.src = "";
           audio.preload = "auto";
           audio.controls = false;
 
@@ -1161,17 +1624,38 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             }
             if (started) return;
             started = true;
-            setPlayCount(plays + 1);
             playBtn.disabled = true;
             playBtn.textContent = "Now playing";
             audioMsg.textContent = "Listening in progress...";
-            audio.currentTime = 0;
-            audio.play().catch(()=>{
-              started = false;
-              playBtn.disabled = false;
-              playBtn.textContent = "Play Listening";
-              audioMsg.textContent = "Unable to play audio on this browser/device.";
-            });
+            (async ()=>{
+              try{
+                const r = await fetch(`/api/session/${encodeURIComponent(token)}/listening-ticket`, {
+                  method: "POST",
+                  credentials: "same-origin",
+                  headers: { "Content-Type": "application/json" },
+                  body: "{}",
+                });
+                const j = await r.json().catch(()=> ({}));
+                if (!r.ok) throw new Error(String(j?.error || j?.message || `Listening unavailable (${r.status})`));
+                const url = String(j?.url || "").trim();
+                if (!url) throw new Error("Listening unavailable.");
+                setPlayCount(plays + 1);
+                audio.src = url;
+                audio.currentTime = 0;
+                await audio.play();
+              }catch(e){
+                started = false;
+                playBtn.disabled = false;
+                playBtn.textContent = "Play Listening";
+                const msg = String(e?.message || "");
+                if (msg.includes("listening_denied") || msg.includes("denied")) {
+                  audioMsg.textContent = "Listening audio is locked.";
+                  lockAudio();
+                } else {
+                  audioMsg.textContent = msg || "Unable to play audio on this browser/device.";
+                }
+              }
+            })();
           });
 
           skipBtn.addEventListener("click", ()=>{
@@ -1208,16 +1692,19 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       }
 
       for (const item of sec.items || []){
-        if (secKind === "writing" && (item.id === "w_intro" || item.id === "w1" || item.id === "w2" || item.id === "w3" || item.id === "w4")){
-          continue;
+        if (secKind === "writing"){
+          const id = String(item?.id || "");
+          if (item?.type === "drag-words") continue;
+          if (writingDragId && (id === writingDragId || id.startsWith(`${writingDragId}_g`))) continue;
+          if (id === "w_intro" || id === "w1" || id === "w2" || id === "w3" || id === "w4") continue;
         }
         if (item.type === "info"){
           const info = document.createElement("div");
-          info.className = "q";
+          info.className = secKind === "reading" ? "q reading-passage" : "q";
+          const raw = String(item.prompt || "");
           const p = document.createElement("div");
           p.className = "small";
-          p.style.whiteSpace = "pre-wrap";
-          p.textContent = String(item.prompt || "");
+          p.innerHTML = richTextHtml(raw);
           info.appendChild(p);
           secEl.appendChild(info);
           continue;
@@ -1411,6 +1898,14 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   async function boot(){
     // Gate + session come from the token endpoint (per exam period).
     const first = await apiGet(`/api/session/${encodeURIComponent(token)}`);
+    const cfg = await apiGet("/api/config").catch(()=> ({}));
+    applyProctoringConfig(cfg && cfg.proctoring ? cfg.proctoring : null);
+
+    proctoringAckedServer = !!(first && first.session && first.session.proctoringAcked);
+    if (proctoringAckedServer && elProctoringAck){
+      try { elProctoringAck.checked = true; elProctoringAck.disabled = true; } catch {}
+    }
+
     const serverNow = Number(first.serverNow || Date.now());
     const openAt = Number(first.openAtUtc || 0);
     const endAt = Number(first.endAtUtc || 0);
@@ -1516,6 +2011,27 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       });
     }
 
+    if (elProctoringReadMore && elProctoringLongNotice){
+      const setLongOpen = (open)=>{
+        elProctoringLongNotice.style.display = open ? "block" : "none";
+        elProctoringReadMore.textContent = open ? "Hide details" : "Read here";
+      };
+      setLongOpen(false);
+      elProctoringReadMore.addEventListener("click", ()=>{
+        const open = elProctoringLongNotice.style.display !== "none";
+        setLongOpen(!open);
+      });
+    }
+
+    if (elProctoringAck){
+      elProctoringAck.addEventListener("change", ()=>{
+        if (!isProctoringAckSatisfied()) {
+          elStartExam.disabled = true;
+          showGateNotice("Please acknowledge the Remote Proctoring Notice to start the exam.", "bad");
+        }
+      });
+    }
+
     if (elCamSelect){
       elCamSelect.addEventListener("change", async ()=>{
         preferredCameraId = String(elCamSelect.value || "");
@@ -1602,6 +2118,8 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           return;
         }
 
+        await ensureProctoringAckRecorded();
+
         if (stopGateLoop) stopGateLoop();
 
         // From this point on, time reaching 0 should auto-submit.
@@ -1618,6 +2136,8 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         renderTest(randomizedPayload);
         wireAutosave();
         await startCameraPresenceProctoring();
+        // First frame is often black immediately after starting; delay snapshot slightly.
+        setTimeout(() => { void captureAndUploadSnapshot("exam_start"); }, 5000);
         startTimerAbsolute(endAt, nowServer);
       }catch(e){
         showGateNotice(String(e.message || e), "bad");

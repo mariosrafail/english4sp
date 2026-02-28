@@ -12,43 +12,127 @@ export function escapeHtml(str){
   return String(str ?? "").replace(/[&<>"']/g, (c)=>({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
 
-export async function apiGet(url){
-  const r = await fetch(url, { credentials:"same-origin" });
-  const j = await r.json().catch(()=> ({}));
-  if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
-    // Not logged in, send to landing.
-    location.href = "/index.html";
-    throw new Error("Not authenticated");
-  }
-  if (r.status === 401 && String(url || "").startsWith("/api/examiner")) {
-    location.href = "/examiners.html";
-    throw new Error("Not authenticated");
-  }
-  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-  return j;
+export async function apiGet(url, { busy, busyText = "Loading…" } = {}){
+  const autoBusy = String(url || "").startsWith("/api/admin") || String(url || "").startsWith("/api/examiner");
+  const doBusy = busy === undefined ? autoBusy : !!busy;
+  const stop = doBusy ? busyStart(busyText) : (() => {});
+  try {
+    const r = await fetch(url, { credentials:"same-origin" });
+    const j = await r.json().catch(()=> ({}));
+    if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
+      // Not logged in, send to landing.
+      location.href = "/index.html";
+      throw new Error("Not authenticated");
+    }
+    if (r.status === 401 && String(url || "").startsWith("/api/examiner")) {
+      location.href = "/examiners.html";
+      throw new Error("Not authenticated");
+    }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
+  } finally { stop(); }
 }
 
-export async function apiPost(url, body){
-  const r = await fetch(url, {
-    method:"POST",
-    headers: { "Content-Type":"application/json" },
-    body: JSON.stringify(body || {}),
-    credentials:"same-origin"
-  });
-  const j = await r.json().catch(()=> ({}));
-  if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
-    location.href = "/index.html";
-    throw new Error("Not authenticated");
-  }
-  if (r.status === 401 && String(url || "").startsWith("/api/examiner")) {
-    location.href = "/examiners.html";
-    throw new Error("Not authenticated");
-  }
-  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
-  return j;
+export async function apiPost(url, body, { busy, busyText = "Working…" } = {}){
+  const autoBusy = String(url || "").startsWith("/api/admin") || String(url || "").startsWith("/api/examiner");
+  const doBusy = busy === undefined ? autoBusy : !!busy;
+  const stop = doBusy ? busyStart(busyText) : (() => {});
+  try {
+    const r = await fetch(url, {
+      method:"POST",
+      headers: { "Content-Type":"application/json" },
+      body: JSON.stringify(body || {}),
+      credentials:"same-origin"
+    });
+    const j = await r.json().catch(()=> ({}));
+    if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
+      location.href = "/index.html";
+      throw new Error("Not authenticated");
+    }
+    if (r.status === 401 && String(url || "").startsWith("/api/examiner")) {
+      location.href = "/examiners.html";
+      throw new Error("Not authenticated");
+    }
+    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    return j;
+  } finally { stop(); }
 }
 
 export function nowMs(){ return Date.now(); }
+
+let _busyCount = 0;
+let _busyTimer = null;
+let _busyOverlay = null;
+let _busyTextEl = null;
+
+function ensureBusyOverlay() {
+  if (_busyOverlay && _busyTextEl) return { overlay: _busyOverlay, textEl: _busyTextEl };
+
+  // Prefer the admin page overlay if present.
+  const existing = document.querySelector("#adminBusyOverlay");
+  if (existing) {
+    _busyOverlay = existing;
+    _busyTextEl = document.querySelector("#adminBusyText");
+    return { overlay: _busyOverlay, textEl: _busyTextEl };
+  }
+
+  const overlay = document.createElement("div");
+  overlay.id = "codexBusyOverlay";
+  overlay.className = "adminBusyOverlay";
+  overlay.style.display = "none";
+  overlay.setAttribute("aria-live", "polite");
+  overlay.setAttribute("aria-busy", "true");
+
+  const card = document.createElement("div");
+  card.className = "adminBusyCard";
+
+  const spinner = document.createElement("div");
+  spinner.className = "adminBusySpinner";
+  spinner.setAttribute("aria-hidden", "true");
+
+  const text = document.createElement("div");
+  text.className = "adminBusyText";
+  text.textContent = "Loading…";
+
+  card.appendChild(spinner);
+  card.appendChild(text);
+  overlay.appendChild(card);
+  document.body.appendChild(overlay);
+
+  _busyOverlay = overlay;
+  _busyTextEl = text;
+  return { overlay, textEl: text };
+}
+
+export function busyStart(text = "Loading…") {
+  const { overlay, textEl } = ensureBusyOverlay();
+  _busyCount += 1;
+  if (textEl) textEl.textContent = String(text || "Loading…");
+
+  if (_busyTimer) {
+    clearTimeout(_busyTimer);
+    _busyTimer = null;
+  }
+
+  // Avoid flicker for fast operations.
+  if (_busyCount === 1) {
+    _busyTimer = setTimeout(() => {
+      _busyTimer = null;
+      if (_busyCount > 0 && overlay) overlay.style.display = "flex";
+    }, 220);
+  }
+
+  return function stop() {
+    _busyCount = Math.max(0, _busyCount - 1);
+    if (_busyCount === 0) {
+      if (_busyTimer) {
+        clearTimeout(_busyTimer);
+        _busyTimer = null;
+      }
+      try { if (overlay) overlay.style.display = "none"; } catch {}
+    }
+  };
+}
 
 function makeDialogBase({ title, message }) {
   const overlay = document.createElement("div");
@@ -118,7 +202,7 @@ export function uiAlert(message, { title = "Notice", okText = "OK" } = {}) {
   });
 }
 
-export function uiConfirm(message, { title = "Confirm", yesText = "Yes", noText = "No" } = {}) {
+export function uiConfirm(message, { title = "Confirm", yesText = "Yes", noText = "No", danger = false } = {}) {
   return new Promise((resolve) => {
     const { overlay, card } = makeDialogBase({ title, message });
     const actions = document.createElement("div");
@@ -140,6 +224,13 @@ export function uiConfirm(message, { title = "Confirm", yesText = "Yes", noText 
     yesBtn.style.width = "auto";
     yesBtn.style.minWidth = "100px";
     yesBtn.textContent = String(yesText || "Yes");
+    if (danger) {
+      yesBtn.style.setProperty("--btnBase", "rgba(239,68,68,0.10)");
+      yesBtn.style.setProperty("--btnBorder", "rgba(239,68,68,0.55)");
+      yesBtn.style.setProperty("--btnText", "rgba(185,28,28,1)");
+      yesBtn.style.setProperty("--btnFill", "rgba(239,68,68,1)");
+      yesBtn.style.setProperty("--btnFillActive", "rgba(220,38,38,1)");
+    }
 
     const done = (val) => {
       document.removeEventListener("keydown", onKey);

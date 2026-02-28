@@ -12,6 +12,7 @@
     "dotenv": "^17.2.3",
     "exceljs": "^4.4.0",
     "express": "^4.19.2",
+    "livekit-server-sdk": "^2.15.0",
     "multer": "^2.0.2",
     "pg": "^8.13.0",
     "sqlite3": "^5.1.7",

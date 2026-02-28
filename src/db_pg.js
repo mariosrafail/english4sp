@@ -1,10 +1,32 @@
 ﻿const { Pool } = require("pg");
 const { hashPassword, verifyPassword } = require("./auth");
+const crypto = require("crypto");
 const { getTestPayloadFull, getTestPayloadForClient, OPEN_AT_UTC_MS: DEFAULT_OPEN_AT_UTC_MS, DURATION_MINUTES: DEFAULT_DURATION_MINUTES } = require("./test_config");
 
 let pool = null;
 // Exam periods now hold per-period configuration (open time + duration).
 const SPEAKING_SLOT_DURATION_MINUTES = 60;
+
+function parseBoolEnv(name, defaultValue) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === null || String(raw).trim() === "") return !!defaultValue;
+  const v = String(raw).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(v)) return true;
+  if (["0", "false", "no", "n", "off"].includes(v)) return false;
+  return !!defaultValue;
+}
+
+function getProctoringConfig() {
+  const modeRaw = String(process.env.PROCTORING_MODE || "presence").trim().toLowerCase();
+  const mode = (modeRaw === "recording" || modeRaw === "record") ? "recording" : "presence";
+  const noticeVersion = String(process.env.PROCTORING_NOTICE_VERSION || "2026-02-26_v1").trim() || "2026-02-26_v1";
+  const retentionDaysNum = Number(process.env.PROCTORING_RETENTION_DAYS || "30");
+  const retentionDays = Number.isFinite(retentionDaysNum) && retentionDaysNum > 0 ? Math.round(retentionDaysNum) : 30;
+  const controllerName = String(process.env.EXAM_CONTROLLER_NAME || "").trim();
+  const privacyNoticeUrl = String(process.env.PROCTORING_PRIVACY_NOTICE_URL || "").trim();
+  const requireAck = parseBoolEnv("REQUIRE_PROCTORING_ACK", true);
+  return { mode, noticeVersion, retentionDays, controllerName, privacyNoticeUrl, requireAck };
+}
 
 function getConnString() {
   return (
@@ -171,6 +193,46 @@ async function initDb() {
   await q(`CREATE INDEX IF NOT EXISTS idx_sessions_candidate_id ON sessions(candidate_id);`);
   await q(`CREATE INDEX IF NOT EXISTS idx_sessions_exam_period_candidate ON sessions(exam_period_id, candidate_id);`);
 
+  // Proctoring acknowledgements (one per session attempt)
+  await q(`
+    CREATE TABLE IF NOT EXISTS public.proctoring_acks (
+      session_id INT PRIMARY KEY,
+      token TEXT NOT NULL,
+      notice_version TEXT NOT NULL,
+      acked_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT proctoring_acks_session_fk FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE CASCADE
+    );
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_proctoring_acks_token ON public.proctoring_acks(token);`);
+
+  // Exam snapshots (max N per session enforced in code)
+  await q(`
+    CREATE TABLE IF NOT EXISTS public.session_snapshots (
+      id BIGSERIAL PRIMARY KEY,
+      session_id INT NOT NULL,
+      token TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      remote_path TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CONSTRAINT session_snapshots_session_fk FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE CASCADE
+    );
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_session_snapshots_session_id ON public.session_snapshots(session_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_session_snapshots_token ON public.session_snapshots(token);`);
+
+  // Listening "play once" enforcement (server-side)
+  await q(`
+    CREATE TABLE IF NOT EXISTS public.session_listening_access (
+      session_id INT PRIMARY KEY,
+      play_count INT NOT NULL DEFAULT 0,
+      ticket TEXT,
+      ticket_expires_utc_ms BIGINT,
+      updated_at_utc_ms BIGINT NOT NULL,
+      CONSTRAINT session_listening_access_session_fk FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE CASCADE
+    );
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_session_listening_access_ticket ON public.session_listening_access(ticket);`);
+
   // Legacy migration: if an old app_config table exists, move its values into exam_periods(id=1)
   // and then drop app_config.
   try {
@@ -275,6 +337,199 @@ if (!arows.rows.length) {
   await q(`CREATE INDEX IF NOT EXISTS idx_examiner_assignments_examiner_id ON public.examiner_assignments(examiner_id);`);
   await q(`CREATE INDEX IF NOT EXISTS idx_examiner_assignments_session_id ON public.examiner_assignments(session_id);`);
 
+  // Admin-managed tests (MCQ builder). Stored per exam period.
+  await q(`
+    CREATE TABLE IF NOT EXISTS public.admin_tests_by_period (
+      exam_period_id INT PRIMARY KEY,
+      payload_json JSONB NOT NULL,
+      updated_at_utc_ms BIGINT NOT NULL,
+      CONSTRAINT admin_tests_by_period_exam_period_fk
+        FOREIGN KEY (exam_period_id) REFERENCES public.exam_periods(id) ON DELETE CASCADE
+    );
+  `);
+
+  // Migration: if legacy public.admin_tests(scope='global') exists, copy into period 1 (best-effort).
+  try {
+    const legacy = await q1(`SELECT to_regclass('public.admin_tests') AS name;`);
+    if (legacy?.name) {
+      const existing = await q1(`SELECT 1 FROM public.admin_tests_by_period LIMIT 1;`);
+      if (!existing) {
+        const row = await q1(
+          `SELECT payload_json AS payload_json, updated_at_utc_ms AS updated_at_utc_ms
+           FROM public.admin_tests
+           WHERE scope = 'global'
+           LIMIT 1;`
+        );
+        if (row?.payload_json) {
+          await q(
+            `INSERT INTO public.admin_tests_by_period (exam_period_id, payload_json, updated_at_utc_ms)
+             VALUES (1, $1::jsonb, $2)
+             ON CONFLICT (exam_period_id) DO NOTHING;`,
+            [JSON.stringify(row.payload_json), Number(row.updated_at_utc_ms || Date.now())]
+          );
+        }
+      }
+    }
+  } catch {}
+
+  // Seed per-exam-period tests (non-destructive).
+  // Goal: keep the full "default" test for the first January period, and smaller tests for other periods.
+  try {
+    const epsR = await q(`SELECT id, name FROM public.exam_periods ORDER BY id ASC;`);
+    const eps = epsR.rows || [];
+    const existingR = await q(`SELECT exam_period_id FROM public.admin_tests_by_period;`);
+    const existing = new Set((existingR.rows || []).map((r) => Number(r.exam_period_id)).filter((n) => Number.isFinite(n) && n > 0));
+
+    const isJanuaryName = (name) => {
+      const s = String(name || "").toLowerCase();
+      return s.includes("january") || s.includes("jan") || s.includes("ιαν") || s.includes("ιανου");
+    };
+
+    const januaryId = (() => {
+      const jan = (eps || []).find((r) => isJanuaryName(r.name));
+      const first = (eps || [])[0];
+      return Number(jan?.id || first?.id || 1) || 1;
+    })();
+
+    const uniqPreserve = (arr) => {
+      const out = [];
+      const seen = new Set();
+      for (const x of arr || []) {
+        const v = String(x || "").trim();
+        if (!v) continue;
+        const k = v.toLowerCase();
+        if (seen.has(k)) continue;
+        seen.add(k);
+        out.push(v);
+      }
+      return out;
+    };
+
+    const convertLegacyWritingToDragWords = (payload) => {
+      const p = JSON.parse(JSON.stringify(payload || {}));
+      if (!p || typeof p !== "object") return payload;
+      p.sections = Array.isArray(p.sections) ? p.sections : [];
+      const writing = p.sections.find((s) => String(s?.id || "") === "writing") || null;
+      if (!writing) return p;
+      writing.items = Array.isArray(writing.items) ? writing.items : [];
+      if (writing.items.some((it) => String(it?.type || "") === "drag-words")) return p;
+
+      const w1 = writing.items.find((it) => String(it?.id || "") === "w1");
+      const w2 = writing.items.find((it) => String(it?.id || "") === "w2");
+      const w3 = writing.items.find((it) => String(it?.id || "") === "w3");
+      const w4 = writing.items.find((it) => String(it?.id || "") === "w4");
+      const gaps = [w1, w2, w3, w4].filter(Boolean);
+      if (gaps.length !== 4) return p;
+
+      const bank = Array.isArray(w1?.choices) ? w1.choices.map((x) => String(x || "").trim()).filter(Boolean) : [];
+      const idxs = [
+        Number(w1?.correctIndex ?? 0),
+        Number(w2?.correctIndex ?? 0),
+        Number(w3?.correctIndex ?? 0),
+        Number(w4?.correctIndex ?? 0),
+      ];
+      const words = idxs.map((i) => (Number.isFinite(i) && i >= 0 && i < bank.length ? String(bank[i]) : "")).filter(Boolean);
+      if (words.length !== 4) return p;
+
+      const usedLower = new Set(words.map((w) => w.toLowerCase()));
+      const extras = bank.filter((w) => !usedLower.has(String(w || "").toLowerCase()));
+      const extraFmt = extras.map((w) => `*${w}*`).join(" ");
+
+      const dragText =
+        `Rain makes the **${words[0]}** shine. The air smells clean and **${words[1]}**. ` +
+        `I put on my **${words[2]}** and boots. I feel calm and happy. ` +
+        `I like rain because it helps **${words[3]}** grow and makes trees look fresh.`;
+
+      const bankWords = uniqPreserve([...words, ...extras]).slice(0, 40);
+      const dragId = "drag1";
+      const dragItem = {
+        id: dragId,
+        type: "drag-words",
+        title: "Task 1: Drag the correct words into the gaps.",
+        instructions: "",
+        text: dragText,
+        extraWords: extraFmt,
+        bankWords: bankWords.slice(),
+        pointsPerGap: 1,
+        points: 0,
+      };
+
+      const gapItems = words.map((w, i) => {
+        const correctIndex = bankWords.findIndex((x) => x.toLowerCase() === String(w || "").toLowerCase());
+        return {
+          id: `${dragId}_g${i + 1}`,
+          type: "mcq",
+          prompt: `Gap ${i + 1}`,
+          choices: bankWords.slice(),
+          correctIndex: correctIndex >= 0 ? correctIndex : 0,
+          points: 1,
+        };
+      });
+
+      writing.items = (writing.items || []).filter((it) => {
+        const id = String(it?.id || "");
+        return id !== "w_intro" && id !== "w1" && id !== "w2" && id !== "w3" && id !== "w4";
+      });
+      writing.items.unshift(dragItem);
+      writing.items.push(...gapItems);
+      return p;
+    };
+
+    const full = normalizeAdminTest(convertLegacyWritingToDragWords(defaultAdminTestFromConfig()));
+
+    const makeSmall = (base) => {
+      const p = JSON.parse(JSON.stringify(base || {}));
+      p.sections = Array.isArray(p.sections) ? p.sections : [];
+      const listening = p.sections.find((s) => String(s?.id || "") === "listening");
+      if (listening && Array.isArray(listening.items)) listening.items = listening.items.filter(Boolean).slice(0, 2);
+      const reading = p.sections.find((s) => String(s?.id || "") === "reading");
+      if (reading && Array.isArray(reading.items)) reading.items = reading.items.filter(Boolean).slice(0, 4);
+
+      const writing = p.sections.find((s) => String(s?.id || "") === "writing");
+      if (writing) {
+        const dragId = "drag1";
+        const dragItem = {
+          id: dragId,
+          type: "drag-words",
+          title: "Task 1: Drag the correct words into the gaps.",
+          instructions: "Mark the correct gap-words in the text using **word**.",
+          text: "This is a **sample** sentence with **gaps**.",
+          extraWords: "*extra*",
+          bankWords: ["sample", "gaps", "extra"],
+          pointsPerGap: 1,
+          points: 0,
+        };
+        const gapItems = [
+          { id: `${dragId}_g1`, type: "mcq", prompt: "Gap 1", choices: dragItem.bankWords.slice(), correctIndex: 0, points: 1 },
+          { id: `${dragId}_g2`, type: "mcq", prompt: "Gap 2", choices: dragItem.bankWords.slice(), correctIndex: 1, points: 1 },
+        ];
+        const q4 = (writing.items || []).find((it) => String(it?.id || "") === "q4") || {
+          id: "q4",
+          type: "writing",
+          prompt: "Write a short paragraph (50–80 words) about your last holiday.",
+          points: 0,
+        };
+        writing.items = [dragItem, ...gapItems, q4];
+      }
+      return normalizeAdminTest(p);
+    };
+
+    const small = makeSmall(full);
+    const now = Date.now();
+    for (const epRow of eps || []) {
+      const id = Number(epRow?.id || 0);
+      if (!Number.isFinite(id) || id <= 0) continue;
+      if (existing.has(id)) continue;
+      const payload = id === januaryId ? full : small;
+      await q(
+        `INSERT INTO public.admin_tests_by_period (exam_period_id, payload_json, updated_at_utc_ms)
+         VALUES ($1, $2::jsonb, $3)
+         ON CONFLICT (exam_period_id) DO NOTHING;`,
+        [id, JSON.stringify(payload || {}), now]
+      );
+    }
+  } catch {}
+
   // speaking interview slots (calendar scheduling + optional video meeting metadata)
   // Migrate legacy table name oral_slots -> speaking_slots.
   await q(`
@@ -342,9 +597,11 @@ if (!arows.rows.length) {
   await q(`ALTER TABLE public.speaking_slots ADD COLUMN IF NOT EXISTS updated_at_utc_ms BIGINT;`);
   await q(`UPDATE public.speaking_slots SET video_provider = COALESCE(NULLIF(video_provider, ''), 'manual') WHERE video_provider IS NULL OR video_provider = '';`);
   await q(`UPDATE public.speaking_slots SET status = COALESCE(NULLIF(status, ''), 'scheduled') WHERE status IS NULL OR status = '';`);
-  await q(`UPDATE public.speaking_slots SET meeting_id = COALESCE(NULLIF(meeting_id, ''), CONCAT('spk-', id::text, '-', start_utc_ms::text)) WHERE meeting_id IS NULL OR meeting_id = '';`);
-  await q(`UPDATE public.speaking_slots SET join_url = COALESCE(NULLIF(join_url, ''), CONCAT('https://meet.jit.si/eng4-speaking-', id::text, '-', start_utc_ms::text)) WHERE join_url IS NULL OR join_url = '';`);
-  await q(`UPDATE public.speaking_slots SET start_url = COALESCE(NULLIF(start_url, ''), join_url) WHERE start_url IS NULL OR start_url = '';`);
+  await q(`UPDATE public.speaking_slots SET meeting_id = NULL WHERE meeting_id = '';`);
+  await q(`UPDATE public.speaking_slots SET join_url = NULL WHERE join_url = '';`);
+  await q(`UPDATE public.speaking_slots SET start_url = NULL WHERE start_url = '';`);
+  await q(`UPDATE public.speaking_slots SET join_url = NULL WHERE join_url LIKE 'https://meet.jit.si/%';`);
+  await q(`UPDATE public.speaking_slots SET start_url = NULL WHERE start_url LIKE 'https://meet.jit.si/%';`);
   await q(`UPDATE public.speaking_slots SET created_at_utc_ms = COALESCE(created_at_utc_ms, EXTRACT(EPOCH FROM now())::bigint * 1000) WHERE created_at_utc_ms IS NULL;`);
   await q(`UPDATE public.speaking_slots SET updated_at_utc_ms = COALESCE(updated_at_utc_ms, created_at_utc_ms, EXTRACT(EPOCH FROM now())::bigint * 1000) WHERE updated_at_utc_ms IS NULL;`);
   await q(`
@@ -818,11 +1075,13 @@ async function getSessionForExam(token) {
     `SELECT s.id, s.token, s.name, s.submitted,
             COALESCE(s.disqualified, FALSE) AS disqualified,
             qg.total_grade AS total_grade,
+            (pa.session_id IS NOT NULL) AS proctoring_acked,
             s.exam_period_id,
             ep.open_at_utc_ms, ep.duration_minutes
      FROM public.sessions s
      LEFT JOIN public.exam_periods ep ON ep.id = s.exam_period_id
      LEFT JOIN public.question_grades qg ON qg.session_id = s.id
+     LEFT JOIN public.proctoring_acks pa ON pa.session_id = s.id
      WHERE s.token = $1
      LIMIT 1`,
     [token]
@@ -833,6 +1092,18 @@ async function getSessionForExam(token) {
   const openAtUtc = Number(s.open_at_utc_ms);
   const durationMinutes = Number(s.duration_minutes);
 
+  const payload = payloadForClientFromFull(await getAdminTest(Number(s.exam_period_id) || 1));
+  // Hide the actual audio file URL from candidates; use ticket-based endpoint instead.
+  try {
+    for (const sec of payload.sections || []) {
+      for (const item of sec.items || []) {
+        if (item && String(item.type || "") === "listening-mcq") {
+          delete item.audioUrl;
+        }
+      }
+    }
+  } catch {}
+
   return {
     session: {
       id: s.id,
@@ -840,6 +1111,7 @@ async function getSessionForExam(token) {
       candidateName: s.name,
       submitted: !!s.submitted,
       disqualified: !!s.disqualified,
+      proctoringAcked: !!s.proctoring_acked,
       grade: s.total_grade === null || s.total_grade === undefined ? null : Number(s.total_grade),
       examPeriodId: Number(s.exam_period_id) || 1,
       openAtUtc: Number.isFinite(openAtUtc) ? openAtUtc : DEFAULT_OPEN_AT_UTC_MS,
@@ -848,7 +1120,7 @@ async function getSessionForExam(token) {
     test: {
       id: 1,
       title: "English Test",
-      payload: getTestPayloadForClient(),
+      payload,
     },
   };
 }
@@ -887,6 +1159,173 @@ async function startSession(token) {
   if (!s) return null;
   if (s.submitted) return { status: "submitted" };
   return { status: "started" };
+}
+
+async function hasProctoringAck(token) {
+  const t = String(token || "").trim();
+  if (!t) return false;
+  const r = await q(`SELECT 1 FROM public.proctoring_acks WHERE token = $1 LIMIT 1;`, [t]);
+  return !!(r.rows && r.rows.length);
+}
+
+async function recordProctoringAck(token, { noticeVersion } = {}) {
+  const t = String(token || "").trim();
+  if (!t) return null;
+  const v = String(noticeVersion || "").trim() || getProctoringConfig().noticeVersion;
+
+  const s = await q1(`SELECT id FROM public.sessions WHERE token = $1 LIMIT 1;`, [t]);
+  if (!s) return null;
+
+  await q(
+    `INSERT INTO public.proctoring_acks (session_id, token, notice_version)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (session_id)
+     DO UPDATE SET notice_version = EXCLUDED.notice_version, acked_at = now();`,
+    [Number(s.id), t, v]
+  );
+  return { ok: true };
+}
+
+async function addSessionSnapshot(token, { reason, remotePath, max = 10 } = {}) {
+  const t = String(token || "").trim();
+  if (!t) return null;
+  const rsn = String(reason || "").trim() || "unknown";
+  const rp = String(remotePath || "").trim();
+  if (!rp) throw new Error("remote_path_required");
+
+  const maxN = Number(max);
+  const limit = Number.isFinite(maxN) && maxN > 0 ? Math.round(maxN) : 10;
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+
+    const s = await client.query(`SELECT id FROM public.sessions WHERE token = $1 LIMIT 1;`, [t]);
+    const row = s.rows?.[0];
+    if (!row) {
+      await client.query("ROLLBACK");
+      return null;
+    }
+    const sid = Number(row.id);
+
+    const c = await client.query(`SELECT COUNT(1)::int AS n FROM public.session_snapshots WHERE session_id = $1;`, [sid]);
+    const n = Number(c.rows?.[0]?.n || 0);
+    if (n >= limit) {
+      await client.query("COMMIT");
+      return { ok: false, limited: true, count: n, remaining: 0 };
+    }
+
+    const ins = await client.query(
+      `INSERT INTO public.session_snapshots (session_id, token, reason, remote_path)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id;`,
+      [sid, t, rsn, rp]
+    );
+
+    await client.query("COMMIT");
+    const next = n + 1;
+    const snapshotId = ins?.rows?.[0]?.id ? Number(ins.rows[0].id) : null;
+    return { ok: true, limited: false, snapshotId, count: next, remaining: Math.max(0, limit - next) };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function listSessionSnapshots({ limit = 200, examPeriodId, sessionId } = {}) {
+  const lim = Number(limit);
+  const n = Number.isFinite(lim) && lim > 0 ? Math.min(2000, Math.round(lim)) : 200;
+  const ep = examPeriodId === undefined || examPeriodId === null ? null : Number(examPeriodId);
+  const sid = sessionId === undefined || sessionId === null ? null : Number(sessionId);
+
+  const where = [];
+  const params = [];
+  if (Number.isFinite(ep) && ep > 0) { params.push(ep); where.push(`s.exam_period_id = $${params.length}`); }
+  if (Number.isFinite(sid) && sid > 0) { params.push(sid); where.push(`ss.session_id = $${params.length}`); }
+  params.push(n);
+  const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const r = await q(
+    `SELECT ss.id AS id,
+            ss.session_id AS "sessionId",
+            ss.token AS token,
+            s.name AS "candidateName",
+            s.exam_period_id AS "examPeriodId",
+            s.submitted AS submitted,
+            ss.reason AS reason,
+            ss.remote_path AS "remotePath",
+            (EXTRACT(EPOCH FROM ss.created_at) * 1000)::bigint AS "createdAtUtcMs"
+     FROM public.session_snapshots ss
+     JOIN public.sessions s ON s.id = ss.session_id
+     ${w}
+     ORDER BY ss.id DESC
+     LIMIT $${params.length};`,
+    params
+  );
+  return Array.isArray(r?.rows) ? r.rows : [];
+}
+
+async function getSessionSnapshotById(id) {
+  const sid = Number(id);
+  if (!Number.isFinite(sid) || sid <= 0) return null;
+  const r = await q(
+    `SELECT ss.id AS id,
+            ss.session_id AS "sessionId",
+            ss.token AS token,
+            s.name AS "candidateName",
+            s.exam_period_id AS "examPeriodId",
+            s.submitted AS submitted,
+            ss.reason AS reason,
+            ss.remote_path AS "remotePath",
+            (EXTRACT(EPOCH FROM ss.created_at) * 1000)::bigint AS "createdAtUtcMs"
+     FROM public.session_snapshots ss
+     JOIN public.sessions s ON s.id = ss.session_id
+     WHERE ss.id = $1
+     LIMIT 1;`,
+    [sid]
+  );
+  return r?.rows?.[0] || null;
+}
+
+async function deleteSessionSnapshotById(id) {
+  const sid = Number(id);
+  if (!Number.isFinite(sid) || sid <= 0) return false;
+  const r = await q(`DELETE FROM public.session_snapshots WHERE id = $1;`, [sid]);
+  return Number(r?.rowCount || 0) > 0;
+}
+
+async function listSnapshotSessions({ limit = 5000, examPeriodId, submittedOnly } = {}) {
+  const lim = Number(limit);
+  const n = Number.isFinite(lim) && lim > 0 ? Math.min(20000, Math.round(lim)) : 5000;
+  const ep = examPeriodId === undefined || examPeriodId === null ? null : Number(examPeriodId);
+  const subOnly = submittedOnly === undefined || submittedOnly === null ? null : !!submittedOnly;
+
+  const where = [];
+  const params = [];
+  if (Number.isFinite(ep) && ep > 0) { params.push(ep); where.push(`s.exam_period_id = $${params.length}`); }
+  if (subOnly === true) { where.push(`s.submitted = TRUE`); }
+  params.push(n);
+  const w = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+  const r = await q(
+    `SELECT s.id AS "sessionId",
+            s.token AS token,
+            s.name AS "candidateName",
+            s.exam_period_id AS "examPeriodId",
+            s.submitted AS submitted,
+            COUNT(ss.id)::int AS "snapshotCount",
+            COALESCE(MAX((EXTRACT(EPOCH FROM ss.created_at) * 1000)::bigint), 0)::bigint AS "latestSnapshotUtcMs"
+     FROM public.sessions s
+     LEFT JOIN public.session_snapshots ss ON ss.session_id = s.id
+     ${w}
+     GROUP BY s.id
+     ORDER BY "latestSnapshotUtcMs" DESC, s.id DESC
+     LIMIT $${params.length};`,
+    params
+  );
+  return Array.isArray(r?.rows) ? r.rows : [];
 }
 
 async function presencePing(_token, _status) {
@@ -929,15 +1368,27 @@ function buildStoredAnswers(payload, normAnswers) {
   const out = {};
   for (const sec of payload.sections || []) {
     for (const item of sec.items || []) {
-      if (!item || !item.id || item.type === "info") continue;
+      if (!item || !item.id || item.type === "info" || item.type === "drag-words") continue;
       out[item.id] = answerToText(item, normAnswers?.[item.id]);
     }
   }
   return out;
 }
 
+function payloadForClientFromFull(full) {
+  const payload = JSON.parse(JSON.stringify(full || {}));
+  for (const sec of payload.sections || []) {
+    for (const item of sec.items || []) {
+      delete item.correctIndex;
+      delete item.correct;
+      delete item.correctText;
+    }
+  }
+  return payload;
+}
+
 async function gradeAttempt(answers) {
-  const payload = getTestPayloadFull();
+  const payload = await getAdminTest(Number(s.exam_period_id) || 1);
   let score = 0;
   let maxScore = 0;
   const breakdown = [];
@@ -977,7 +1428,7 @@ async function gradeAttempt(answers) {
 
 async function submitAnswers(token, answers, clientMeta) {
   const s = await q1(
-    `SELECT id, submitted, COALESCE(disqualified, FALSE) AS disqualified
+    `SELECT id, submitted, exam_period_id, COALESCE(disqualified, FALSE) AS disqualified
      FROM sessions
      WHERE token = $1
      ORDER BY id DESC
@@ -1000,7 +1451,7 @@ async function submitAnswers(token, answers, clientMeta) {
     [s.id, isDisqualified]
   );
 
-  const payload = getTestPayloadFull();
+  const payload = await getAdminTest(Number(s.exam_period_id) || 1);
   let wVal = "";
   try {
     for (const sec of payload.sections || []) {
@@ -1233,6 +1684,7 @@ async function getQuestionGrades(sessionId) {
     `SELECT
         session_id AS "sessionId",
         token,
+        s.exam_period_id AS "examPeriodId",
         COALESCE(q_writing, '') AS "qWriting",
         COALESCE(answers_json, '{}'::jsonb) AS "answersJson",
         speaking_grade AS "speakingGrade",
@@ -1240,6 +1692,7 @@ async function getQuestionGrades(sessionId) {
         total_grade AS "totalGrade",
         created_at_utc_ms AS "createdAtUtcMs"
      FROM public.question_grades
+     JOIN public.sessions s ON s.id = public.question_grades.session_id
      WHERE session_id = $1
      LIMIT 1;`,
     [sid]
@@ -1250,9 +1703,154 @@ async function getQuestionGrades(sessionId) {
 
 function getConfig() {
   // Kept for backwards compatibility with the public /api/config endpoint.
+  const p = getProctoringConfig();
   return {
     serverNow: Date.now(),
+    proctoring: p,
   };
+}
+
+function normalizeAdminTest(test) {
+  const p = test && typeof test === "object" ? test : {};
+  const sectionsRaw = Array.isArray(p.sections) ? p.sections : [];
+  const sections = sectionsRaw.slice(0, 8).map((sec, secIdx) => {
+    const s = sec && typeof sec === "object" ? sec : {};
+    const id = String(s.id || "").trim().slice(0, 40) || `sec_${secIdx + 1}`;
+    const title = String(s.title || "").trim().slice(0, 120) || "Section";
+    const description = String(s.description || "").trim().slice(0, 600);
+    const rules = s.rules && typeof s.rules === "object" ? s.rules : null;
+    const itemsRaw = Array.isArray(s.items) ? s.items : [];
+    const items = itemsRaw.slice(0, 400).map((it, iIdx) => {
+      const it0 = it && typeof it === "object" ? it : {};
+      const type = String(it0.type || "").trim() || "mcq";
+      const itemId = String(it0.id || "").trim().slice(0, 80) || `${id}_${iIdx + 1}`;
+      const prompt = String(it0.prompt || "").trim().slice(0, 2500);
+      const audioUrl = String(it0.audioUrl || "").trim().slice(0, 1200);
+      const points = Number(it0.points ?? 1);
+      const choicesRaw = Array.isArray(it0.choices) ? it0.choices : [];
+      const choices = choicesRaw.slice(0, 12).map((c) => String(c || "").trim().slice(0, 240));
+      const correctIndexRaw = Number(it0.correctIndex ?? 0);
+      const correctIndex = Number.isFinite(correctIndexRaw)
+        ? Math.max(0, Math.min(Math.floor(correctIndexRaw), Math.max(0, choices.length - 1)))
+        : 0;
+
+      if (type === "drag-words") {
+        const title = String(it0.title || "").trim().slice(0, 180);
+        const instructions = String(it0.instructions || "").trim().slice(0, 2000);
+        const text = String(it0.text || "").trim().slice(0, 12000);
+        const extraWords = String(it0.extraWords || "").trim().slice(0, 4000);
+        const bankWordsRaw = Array.isArray(it0.bankWords) ? it0.bankWords : [];
+        const bankWords = bankWordsRaw
+          .slice(0, 40)
+          .map((w) => String(w || "").trim().slice(0, 80))
+          .filter(Boolean);
+        const ppg = Number(it0.pointsPerGap ?? 1);
+        const pointsPerGap = Number.isFinite(ppg) ? Math.max(0, Math.min(Math.round(ppg), 10)) : 1;
+        return { id: itemId, type: "drag-words", title, instructions, text, extraWords, bankWords, pointsPerGap, points: 0 };
+      }
+      if (type === "info") return { id: itemId, type: "info", prompt, points: 0 };
+      if (type === "writing") return { id: itemId, type: "writing", prompt, points: 0 };
+      if (type === "tf") return { id: itemId, type: "tf", prompt, correct: !!it0.correct, points: Number.isFinite(points) ? Math.max(0, Math.min(points, 10)) : 1 };
+
+      const out = {
+        id: itemId,
+        type: type === "listening-mcq" ? "listening-mcq" : "mcq",
+        prompt,
+        choices,
+        correctIndex,
+        points: Number.isFinite(points) ? Math.max(0, Math.min(points, 10)) : 1,
+      };
+      if (type === "listening-mcq" && audioUrl) out.audioUrl = audioUrl;
+      return out;
+    });
+    return { id, title, description, rules, items };
+  });
+
+  return {
+    version: Number(p.version || 1) || 1,
+    randomize: !!p.randomize,
+    sections,
+  };
+}
+
+function defaultAdminTestFromConfig() {
+  return getTestPayloadFull();
+}
+
+function coerceLegacyAdminTestToPayload(obj) {
+  if (!obj || typeof obj !== "object") return null;
+  if (Array.isArray(obj.sections)) return obj;
+  if (!Array.isArray(obj.questions)) return null;
+
+  const qs = obj.questions.slice(0, 200).map((q, idx) => {
+    const qq = q && typeof q === "object" ? q : {};
+    const id = String(qq.id || "").trim().slice(0, 80) || `r_${idx + 1}`;
+    const prompt = String(qq.text || "").trim().slice(0, 800);
+    const choicesRaw = Array.isArray(qq.choices) ? qq.choices : [];
+    const choices = choicesRaw.slice(0, 6).map((c) => String(c || "").trim().slice(0, 240));
+    const correctIndexRaw = Number(qq.correctIndex ?? 0);
+    const correctIndex = Number.isFinite(correctIndexRaw)
+      ? Math.max(0, Math.min(Math.floor(correctIndexRaw), Math.max(0, choices.length - 1)))
+      : 0;
+    return { id, type: "mcq", prompt, choices, correctIndex, points: 1 };
+  });
+
+  const base = defaultAdminTestFromConfig();
+  const sections = Array.isArray(base.sections) ? base.sections.slice() : [];
+  const reading = sections.find((s) => String(s.id || "").includes("read")) || sections[1] || null;
+  if (reading && reading.items) reading.items = qs;
+  else sections.push({ id: "reading", title: "Part 2: Reading", items: qs });
+  return { ...base, sections };
+}
+
+function adminTestHasAnyRealItems(payload) {
+  const p = payload && typeof payload === "object" ? payload : null;
+  if (!p || !Array.isArray(p.sections)) return false;
+  for (const sec of p.sections || []) {
+    for (const item of sec?.items || []) {
+      if (!item || !item.type) continue;
+      if (item.type === "info") continue;
+      if (item.type === "mcq" || item.type === "listening-mcq" || item.type === "tf" || item.type === "short") return true;
+      if (item.type === "drag-words") {
+        const t = String(item.text || "").trim();
+        if (/\*\*[^*]+?\*\*/.test(t)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+async function getAdminTest(examPeriodId = 1) {
+  const ep = Number(examPeriodId);
+  const id = Number.isFinite(ep) && ep > 0 ? ep : 1;
+  const row = await q1(
+    `SELECT payload_json AS payload_json
+     FROM public.admin_tests_by_period
+     WHERE exam_period_id = $1
+     LIMIT 1;`,
+    [id]
+  );
+  if (!row || !row.payload_json) return defaultAdminTestFromConfig();
+  const coerced = coerceLegacyAdminTestToPayload(row.payload_json) || row.payload_json;
+  const norm = normalizeAdminTest(coerced);
+  if (!adminTestHasAnyRealItems(norm)) return defaultAdminTestFromConfig();
+  return norm;
+}
+
+async function setAdminTest(examPeriodId = 1, test) {
+  const ep = Number(examPeriodId);
+  const id = Number.isFinite(ep) && ep > 0 ? ep : 1;
+  const payload = normalizeAdminTest(test);
+  const now = Date.now();
+  await q(
+    `INSERT INTO public.admin_tests_by_period (exam_period_id, payload_json, updated_at_utc_ms)
+     VALUES ($1, $2::jsonb, $3)
+     ON CONFLICT (exam_period_id) DO UPDATE SET
+       payload_json = EXCLUDED.payload_json,
+       updated_at_utc_ms = EXCLUDED.updated_at_utc_ms;`,
+    [id, JSON.stringify(payload || {}), now]
+  );
+  return { ok: true, updatedAtUtcMs: now };
 }
 
 async function listExamPeriods() {
@@ -1438,18 +2036,9 @@ async function createSpeakingSlot(input = {}) {
   }
   if (!meetingMetadata || typeof meetingMetadata !== "object") meetingMetadata = null;
 
-  // Default auto-generated meeting link when provider integration does not supply one yet.
-  const autoMeetingId = `spk-${session ? Number(session.id) : "x"}-${Math.floor(providedStart / 1000)}`;
-  const meetingIdVal = String(input.meetingId || "").trim() || autoMeetingId;
-  const joinUrlVal = String(input.joinUrl || "").trim() || `https://meet.jit.si/eng4-speaking-${meetingIdVal}`;
-  const startUrlVal = String(input.startUrl || "").trim() || joinUrlVal;
-  if (!meetingMetadata) {
-    meetingMetadata = {
-      autoGenerated: true,
-      generatedBy: "server_default_link",
-      requestedProvider: videoProvider,
-    };
-  }
+  const meetingIdVal = String(input.meetingId || "").trim() || null;
+  const joinUrlVal = String(input.joinUrl || "").trim() || null;
+  const startUrlVal = String(input.startUrl || "").trim() || null;
 
   const r = await q(
     `INSERT INTO public.speaking_slots
@@ -1729,6 +2318,101 @@ async function verifyExaminer(username, password) {
   return verifyPassword(p, row.rows[0].pass_hash);
 }
 
+function makeListeningTicket() {
+  return crypto.randomBytes(24).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function issueListeningTicket(token, { maxPlays = 1, ttlMs = 20 * 60 * 1000 } = {}) {
+  const t = String(token || "").trim();
+  if (!t) return null;
+  const s = await q1(
+    `SELECT id, submitted, exam_period_id
+     FROM public.sessions
+     WHERE token = $1
+     ORDER BY id DESC
+     LIMIT 1;`,
+    [t]
+  );
+  if (!s) return null;
+  if (!!s.submitted) return { ok: false, blocked: true, reason: "submitted" };
+
+  const sid = Number(s.id);
+  const now = Date.now();
+  const ttl = Number(ttlMs);
+  const ttlOk = Number.isFinite(ttl) && ttl > 5000 ? Math.min(60 * 60 * 1000, Math.round(ttl)) : 20 * 60 * 1000;
+  const max = Number(maxPlays);
+  const maxOk = Number.isFinite(max) && max > 0 ? Math.min(3, Math.round(max)) : 1;
+
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    const row = await client.query(
+      `SELECT play_count::int AS play_count, ticket, ticket_expires_utc_ms::bigint AS expires
+       FROM public.session_listening_access
+       WHERE session_id = $1
+       LIMIT 1;`,
+      [sid]
+    );
+    const r0 = row.rows?.[0] || null;
+    const playCount = Number(r0?.play_count || 0);
+    const ticket = String(r0?.ticket || "");
+    const expires = Number(r0?.expires || 0);
+
+    if (ticket && Number.isFinite(expires) && expires > now + 5000) {
+      await client.query("COMMIT");
+      return { ok: true, ticket, expiresAtUtcMs: expires, playCount, maxPlays: maxOk, examPeriodId: Number(s.exam_period_id) || 1 };
+    }
+    if (playCount >= maxOk) {
+      await client.query("COMMIT");
+      return { ok: false, blocked: true, reason: "max_plays", playCount, maxPlays: maxOk };
+    }
+
+    const nextTicket = makeListeningTicket();
+    const nextCount = playCount + 1;
+    const nextExp = now + ttlOk;
+    await client.query(
+      `INSERT INTO public.session_listening_access (session_id, play_count, ticket, ticket_expires_utc_ms, updated_at_utc_ms)
+       VALUES ($1,$2,$3,$4,$5)
+       ON CONFLICT (session_id) DO UPDATE
+       SET play_count = EXCLUDED.play_count,
+           ticket = EXCLUDED.ticket,
+           ticket_expires_utc_ms = EXCLUDED.ticket_expires_utc_ms,
+           updated_at_utc_ms = EXCLUDED.updated_at_utc_ms;`,
+      [sid, nextCount, nextTicket, nextExp, now]
+    );
+    await client.query("COMMIT");
+    return { ok: true, ticket: nextTicket, expiresAtUtcMs: nextExp, playCount: nextCount, maxPlays: maxOk, examPeriodId: Number(s.exam_period_id) || 1 };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+async function verifyListeningTicket(token, ticket) {
+  const t = String(token || "").trim();
+  const tk = String(ticket || "").trim();
+  if (!t || !tk) return null;
+  const r = await q(
+    `SELECT s.id AS "sessionId", s.exam_period_id AS "examPeriodId", s.submitted AS submitted,
+            a.ticket AS ticket, a.ticket_expires_utc_ms AS "expires"
+     FROM public.sessions s
+     LEFT JOIN public.session_listening_access a ON a.session_id = s.id
+     WHERE s.token = $1
+     ORDER BY s.id DESC
+     LIMIT 1;`,
+    [t]
+  );
+  const row = r.rows?.[0] || null;
+  if (!row) return null;
+  if (!!row.submitted) return { ok: false, blocked: true, reason: "submitted" };
+  const exp = Number(row.expires || 0);
+  if (!row.ticket || String(row.ticket) !== tk) return { ok: false, blocked: true, reason: "bad_ticket" };
+  if (!Number.isFinite(exp) || exp <= Date.now()) return { ok: false, blocked: true, reason: "expired" };
+  return { ok: true, sessionId: Number(row.sessionId), examPeriodId: Number(row.examPeriodId) || 1, expiresAtUtcMs: exp };
+}
+
 // updateAppConfig removed (app_config deprecated)
 
 
@@ -1797,7 +2481,7 @@ async function setExaminerGrades({ sessionId, speakingGrade, writingGrade }) {
   );
 
   // Compute objective score from all auto-gradable items.
-  const payload = getTestPayloadFull();
+  const payload = await getAdminTest(Number(s.exam_period_id) || 1);
   function norm(s){ return String(s || "").trim().toLowerCase(); }
   const ansObj = (qg && typeof qg.answers_json === "object" && qg.answers_json) || {};
   let objectiveEarned = 0;
@@ -1877,7 +2561,18 @@ module.exports = {
   examinerCanAccessSession,
   setExaminerGrades,
   presencePing,
+  hasProctoringAck,
+  recordProctoringAck,
+  addSessionSnapshot,
+  listSessionSnapshots,
+  listSnapshotSessions,
+  getSessionSnapshotById,
+  deleteSessionSnapshotById,
+  issueListeningTicket,
+  verifyListeningTicket,
   getConfig,
+  getAdminTest,
+  setAdminTest,
   listExamPeriods,
   listExaminers,
   listSpeakingSlots,

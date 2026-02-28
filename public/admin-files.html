@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Admin Files</title>
+  <link rel="stylesheet" href="/styles.css"/>
+  <link rel="icon" href="/favicon.ico"/>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div style="margin-bottom:10px" data-embed-hide>
+        <a class="badge" href="/admin.html" aria-label="Back to Admin" title="Back to Admin" style="display:inline-flex; align-items:center; justify-content:center; width:46px; height:42px; padding:0;">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" style="width:22px; height:22px;">
+            <path d="M14.7 5.3a1 1 0 0 1 0 1.4L10.41 11H20a1 1 0 1 1 0 2h-9.59l4.3 4.3a1 1 0 1 1-1.42 1.4l-6-6a1 1 0 0 1 0-1.4l6-6a1 1 0 0 1 1.41 0Z" fill="currentColor"/>
+          </svg>
+        </a>
+      </div>
+
+      <h1 data-embed-hide>Files</h1>
+      <p class="muted" style="margin-top:6px" data-embed-hide>Manage listening audio and exam snapshots.</p>
+
+      <div class="row2" style="align-items:center; justify-content:space-between; gap:10px;">
+        <div class="muted small">Storage is under <span class="mono">FILE_STORAGE_DIR</span> (default: <span class="mono">./storage</span>).</div>
+        <button id="btnReload" type="button" style="width:auto;">Reload</button>
+      </div>
+
+      <div class="hr"></div>
+
+      <div class="admin-q-tabs" role="tablist" aria-label="File sections">
+        <button class="admin-q-tab" type="button" role="tab" aria-selected="true" data-ftab="listening">Listening</button>
+        <button class="admin-q-tab" type="button" role="tab" aria-selected="false" data-ftab="snapshots">Snapshots</button>
+      </div>
+
+      <div id="panelListening" class="admin-q-panel" data-fpanel="listening">
+        <h2 style="margin-top:10px;">Listening audio</h2>
+        <div class="help">These files are used during the exam. Deleting them removes the file (and clears the stored link in the test for that exam period).</div>
+        <div id="listeningList" style="margin-top:10px;"><div class="muted">Loading…</div></div>
+      </div>
+
+      <div id="panelSnapshots" class="admin-q-panel" data-fpanel="snapshots" hidden>
+        <h2 style="margin-top:10px;">Snapshots</h2>
+        <div class="help">Snapshots are taken during the exam (proctoring). Select a submitted candidate to view their snapshots.</div>
+
+        <div class="fileMgrControls" style="margin-top:10px;">
+          <div class="row2" style="flex-wrap:wrap;">
+            <div style="flex:2 1 280px;">
+              <input id="snapSearch" class="input" type="text" placeholder="Search by name, token, reason, path..."/>
+            </div>
+            <div style="flex:1 1 190px;">
+              <select id="snapSortBy" class="input mono" aria-label="Sort candidates by">
+                <option value="latest">Sort: Latest</option>
+                <option value="name">Sort: Name</option>
+              </select>
+            </div>
+            <div style="flex:1 1 220px;">
+              <select id="snapExamPeriod" class="input mono" aria-label="Filter by exam period">
+                <option value="">All exam periods</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="snapFolderRow" style="margin-top:10px;">
+          <div class="muted small" style="margin:2px 0 8px 0;">Candidates</div>
+          <div class="snapPager" style="margin:-2px 0 10px 0;">
+            <button id="snapPrev" type="button" class="btnSmall btnGhost">Prev</button>
+            <div id="snapPageInfo" class="small muted" style="flex:1; text-align:center;">-</div>
+            <button id="snapNext" type="button" class="btnSmall btnGhost">Next</button>
+          </div>
+          <div id="snapFolders"><div class="muted">Loading...</div></div>
+        </div>
+        <div id="snapshotsList" style="margin-top:10px;"><div class="muted">Loading…</div></div>
+      </div>
+
+      <div id="out" class="help" style="margin-top:10px;"></div>
+    </div>
+  </div>
+
+  <input id="uploadListeningFile" type="file" accept="audio/mpeg,audio/mp3,.mp3" style="display:none;"/>
+
+  <script type="module" src="/admin-files.js"></script>
+  <script type="module" src="/embed_child.js"></script>
+</body>
+</html>

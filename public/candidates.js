@@ -516,6 +516,7 @@ elTbody.addEventListener("click", async (ev) => {
 
     try {
       openBtn.disabled = true;
+      showCandidatesBusy("Loading details. Please wait...");
       const r = await fetch(`/api/admin/candidates/${sid}/details`, { credentials: "same-origin" });
       const j = await r.json().catch(() => ({}));
       if (r.status === 401) {
@@ -588,6 +589,7 @@ elTbody.addEventListener("click", async (ev) => {
     } catch (e) {
       await uiAlert(e?.message || String(e), { title: "Load Error" });
     } finally {
+      hideCandidatesBusy();
       openBtn.disabled = false;
     }
     return;
@@ -606,6 +608,7 @@ elTbody.addEventListener("click", async (ev) => {
 
   btn.disabled = true;
   try {
+    showCandidatesBusy("Deleting candidate. Please wait...");
     const r = await fetch(`/api/admin/candidates/${sid}`, {
       method: "DELETE",
       credentials: "same-origin",
@@ -625,5 +628,7 @@ elTbody.addEventListener("click", async (ev) => {
   } catch (e) {
     await uiAlert(e?.message || String(e), { title: "Delete Error" });
     btn.disabled = false;
+  } finally {
+    hideCandidatesBusy();
   }
 });

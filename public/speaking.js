@@ -9,13 +9,13 @@ const elJoinBtn = qs("#joinBtn");
 const params = new URLSearchParams(location.search);
 const token = String(params.get("token") || "").trim();
 
-let serverOffsetMs = 0;
 let activeRedirectUrl = "";
 let pollTimer = null;
 let tickTimer = null;
+let countdownTargetMs = 0;
 
 function nowMs() {
-  return Date.now() + serverOffsetMs;
+  return Date.now();
 }
 
 function fmt(ms) {
@@ -40,10 +40,14 @@ function showMsg(text, cls = "") {
 
 function secondsToHms(totalSec) {
   const sec = Math.max(0, Math.floor(Number(totalSec || 0)));
+  const d = Math.floor(sec / 86400);
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
   const pad = (n) => String(n).padStart(2, "0");
+  if (sec >= 86400) {
+    return `${d} days, ${h % 24} hours, ${m} minutes, ${s} seconds`;
+  }
   return `${pad(h)}:${pad(m)}:${pad(s)}`;
 }
 
@@ -56,6 +60,7 @@ async function fetchGate() {
 }
 
 function renderCountdown(targetMs) {
+  countdownTargetMs = Number(targetMs || 0);
   const leftSec = Math.ceil((Number(targetMs || 0) - nowMs()) / 1000);
   elCountdown.textContent = secondsToHms(leftSec);
 }
@@ -70,8 +75,6 @@ function stopTimers() {
 async function refresh() {
   try {
     const gate = await fetchGate();
-    const serverNow = Number(gate.serverNow || Date.now());
-    serverOffsetMs = serverNow - Date.now();
     const startUtcMs = Number(gate.startUtcMs || 0);
     const endUtcMs = Number(gate.endUtcMs || 0);
     elWindow.textContent = `${fmt(startUtcMs)}  to  ${fmt(endUtcMs)}`;
@@ -87,6 +90,7 @@ async function refresh() {
 
     if (gate.status === "open") {
       activeRedirectUrl = String(gate.redirectUrl || "").trim();
+      countdownTargetMs = 0;
       elJoinBtn.disabled = !activeRedirectUrl;
       elSubtitle.textContent = "Session is now open.";
       elCountdown.textContent = "00:00:00";
@@ -101,6 +105,7 @@ async function refresh() {
 
     if (gate.status === "ended") {
       activeRedirectUrl = "";
+      countdownTargetMs = 0;
       elJoinBtn.disabled = true;
       elSubtitle.textContent = "Session has ended.";
       elCountdown.textContent = "00:00:00";
@@ -126,11 +131,8 @@ if (!token) {
   refresh().catch(() => {});
   pollTimer = setInterval(() => { refresh().catch(() => {}); }, 5000);
   tickTimer = setInterval(() => {
-    const txt = String(elCountdown.textContent || "");
-    if (/^\d{2}:\d{2}:\d{2}$/.test(txt)) {
-      const [h, m, s] = txt.split(":").map((x) => Number(x));
-      const left = h * 3600 + m * 60 + s;
-      elCountdown.textContent = secondsToHms(left - 1);
+    if (Number.isFinite(countdownTargetMs) && countdownTargetMs > 0) {
+      renderCountdown(countdownTargetMs);
     }
   }, 1000);
 }

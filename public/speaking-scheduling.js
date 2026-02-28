@@ -3,7 +3,7 @@ import { apiGet, qs, escapeHtml } from "/app.js";
 const elExamPeriod = qs("#examPeriod");
 const elExaminer = qs("#examinerFilter");
 const elReload = qs("#btnReload");
-const elRecreateZoom = qs("#btnRecreateZoom");
+const elRecreateMeeting = qs("#btnRecreateMeeting");
 const elQ = qs("#q");
 const elClear = qs("#clear");
 const elFrom = qs("#fromDT");
@@ -15,10 +15,28 @@ const elPrev = qs("#prev");
 const elNext = qs("#next");
 const elPageNum = qs("#pageNum");
 const elPageMax = qs("#pageMax");
+const elBusyOverlay = qs("#speakingBusyOverlay");
+const elBusyText = qs("#speakingBusyText");
 
 let _rows = [];
 let _view = [];
 let _page = 1;
+let _busyCount = 0;
+
+function showBusy(message) {
+  _busyCount += 1;
+  if (elBusyText) {
+    elBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
+  }
+  if (elBusyOverlay) elBusyOverlay.style.display = "flex";
+}
+
+function hideBusy() {
+  _busyCount = Math.max(0, _busyCount - 1);
+  if (_busyCount === 0 && elBusyOverlay) {
+    elBusyOverlay.style.display = "none";
+  }
+}
 
 function toDatetimeLocalValue(ms) {
   const d = new Date(Number(ms));
@@ -51,17 +69,22 @@ async function saveSpeakingStart(slotId) {
   const startUtcMs = parseDatetimeLocalToMs(startEl?.value || "");
   if (!Number.isFinite(startUtcMs) || startUtcMs <= 0) throw new Error("Invalid date/time");
   const endUtcMs = startUtcMs + (60 * 60 * 1000);
-  const r = await fetch(`/api/admin/speaking-slots/${encodeURIComponent(sid)}`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ startUtcMs, endUtcMs }),
-  });
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    throw new Error(j.error || `HTTP ${r.status}`);
+  showBusy("Saving…");
+  try {
+    const r = await fetch(`/api/admin/speaking-slots/${encodeURIComponent(sid)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ startUtcMs, endUtcMs }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    return r.json();
+  } finally {
+    hideBusy();
   }
-  return r.json();
 }
 
 function hydrateExaminerFilter(rows) {
@@ -88,10 +111,19 @@ function applyFilters() {
     if (Number.isFinite(fromMs) && Number(r.startUtcMs || 0) < fromMs) return false;
     if (Number.isFinite(toMs) && Number(r.startUtcMs || 0) > toMs) return false;
     if (!q) return true;
+    const sessionId = Number(r.sessionId || 0);
+    const slotId = Number(r.id || 0);
+    const sessionIdText = Number.isFinite(sessionId) && sessionId > 0 ? String(sessionId) : "";
+    const sessionIdPad = sessionIdText ? sessionIdText.padStart(6, "0") : "";
+    const sessionCode = sessionIdPad ? `s-${sessionIdPad}` : "";
     const blob = [
       String(r.candidateName || ""),
       String(r.sessionToken || ""),
       String(r.examinerUsername || ""),
+      String(slotId > 0 ? slotId : ""),
+      sessionIdText,
+      sessionIdPad,
+      sessionCode,
     ].join(" ").toLowerCase();
     return blob.includes(q);
   });
@@ -119,9 +151,6 @@ function renderTable() {
         ? `${location.origin}/speaking.html?token=${encodeURIComponent(String(r.sessionToken || ""))}`
         : "");
       const gateUrl = escapeHtml(gateUrlRaw);
-      const shortLink = gateUrlRaw
-        ? escapeHtml(gateUrlRaw.length > 34 ? `${gateUrlRaw.slice(0, 34)}...` : gateUrlRaw)
-        : "-";
       const startValue = Number.isFinite(Number(r.startUtcMs)) ? toDatetimeLocalValue(Number(r.startUtcMs)) : "";
       return `
         <tr data-slot-id="${id}">
@@ -133,8 +162,8 @@ function renderTable() {
           </td>
           <td>${candidate}</td>
           <td>${examiner || "-"}</td>
-          <td>${gateUrlRaw ? `<a href="${gateUrl}" target="_blank" rel="noopener" class="mono">${shortLink}</a>` : "-"}</td>
-          <td><button class="btn speaking-show-zoom-btn" data-slot-id="${id}" type="button" style="width:auto; min-width:92px;">Show</button></td>
+          <td>${gateUrlRaw ? `<a href="${gateUrl}" target="_blank" rel="noopener" class="mono">Open</a>` : "-"}</td>
+          <td><button class="btn speaking-show-meeting-btn" data-slot-id="${id}" type="button" style="width:auto; min-width:92px;">Show</button></td>
         </tr>
       `;
     }).join("");
@@ -149,24 +178,29 @@ function renderTable() {
 async function autoGenerate(examPeriodId) {
   const ep = Number(examPeriodId);
   if (!Number.isFinite(ep) || ep <= 0) return null;
-  const r = await fetch("/api/admin/speaking-slots/auto-generate", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    credentials: "same-origin",
-    body: JSON.stringify({ examPeriodId: ep }),
-  });
-  if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    throw new Error(j.error || `HTTP ${r.status}`);
+  showBusy("Auto-generating…");
+  try {
+    const r = await fetch("/api/admin/speaking-slots/auto-generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ examPeriodId: ep }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    return r.json();
+  } finally {
+    hideBusy();
   }
-  return r.json();
 }
 
-async function recreateZoomLinks(examPeriodId) {
+async function recreateMeetingLinks(examPeriodId) {
   const body = {};
   const ep = Number(examPeriodId || 0);
   if (Number.isFinite(ep) && ep > 0) body.examPeriodId = ep;
-  const r = await fetch("/api/admin/speaking-slots/recreate-zoom-links", {
+  const r = await fetch("/api/admin/speaking-slots/recreate-meeting-links", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "same-origin",
@@ -223,22 +257,24 @@ async function init() {
 }
 
 if (elReload) elReload.addEventListener("click", () => { loadRows().catch((e) => { if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`; }); });
-if (elRecreateZoom) {
-  elRecreateZoom.addEventListener("click", async () => {
+if (elRecreateMeeting) {
+  elRecreateMeeting.addEventListener("click", async () => {
     try {
-      elRecreateZoom.disabled = true;
-      if (elOut) elOut.textContent = "Recreating Zoom links...";
+      elRecreateMeeting.disabled = true;
+      showBusy("Recreating meeting links. Don't close this page. Please wait...");
+      if (elOut) elOut.textContent = "Recreating meeting links...";
       const ep = selectedExamPeriodId();
-      const out = await recreateZoomLinks(ep);
+      const out = await recreateMeetingLinks(ep);
       const done = Number(out?.updated || 0);
       const failed = Number(out?.failed || 0);
       const scope = Number(out?.examPeriodId || 0) > 0 ? `exam period ${Number(out.examPeriodId)}` : "all exam periods";
-      if (elOut) elOut.innerHTML = `<span class="ok">Recreated ${done} Zoom link(s) for ${escapeHtml(scope)}.</span>${failed > 0 ? ` <span class="bad">${failed} failed.</span>` : ""}`;
+      if (elOut) elOut.innerHTML = `<span class="ok">Recreated ${done} meeting link(s) for ${escapeHtml(scope)}.</span>${failed > 0 ? ` <span class="bad">${failed} failed.</span>` : ""}`;
       await loadRows();
     } catch (e) {
       if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
     } finally {
-      elRecreateZoom.disabled = false;
+      hideBusy();
+      elRecreateMeeting.disabled = false;
     }
   });
 }
@@ -280,20 +316,31 @@ if (elTbody) {
       return;
     }
 
-    const showZoomBtn = target.closest(".speaking-show-zoom-btn");
-    if (showZoomBtn) {
-      const slotId = Number(showZoomBtn.getAttribute("data-slot-id") || 0);
+    const showMeetingBtn = target.closest(".speaking-show-meeting-btn");
+    if (showMeetingBtn) {
+      const slotId = Number(showMeetingBtn.getAttribute("data-slot-id") || 0);
       const row = (_rows || []).find((x) => Number(x.id) === slotId);
-      const zoomUrl = String(row?.joinUrl || "").trim();
-      if (!zoomUrl) {
-        if (elOut) elOut.innerHTML = `<span class="bad">No Zoom URL found for slot ${slotId}.</span>`;
+      const joinUrl = String(row?.joinUrl || "").trim();
+      const startUrl = String(row?.startUrl || "").trim();
+      const provider = String(row?.meetingMetadata?.provider || row?.videoProvider || "").trim().toLowerCase();
+      const preferredUrl = provider === "zoom" && startUrl ? startUrl : joinUrl;
+      if (!preferredUrl) {
+        if (elOut) elOut.innerHTML = `<span class="bad">No meeting URL found for slot ${slotId}.</span>`;
         return;
       }
       try {
-        await navigator.clipboard.writeText(zoomUrl);
-        if (elOut) elOut.innerHTML = `<span class="ok">Zoom URL copied for slot ${slotId}.</span><br><a class="mono" href="${escapeHtml(zoomUrl)}" target="_blank" rel="noopener">${escapeHtml(zoomUrl)}</a>`;
+        await navigator.clipboard.writeText(preferredUrl);
+        if (provider === "zoom" && startUrl && joinUrl && startUrl !== joinUrl) {
+          if (elOut) elOut.innerHTML = `<span class="ok">Zoom host URL copied for slot ${slotId}.</span><div style="margin-top:6px;"><div class="muted">Host:</div><a class="mono" href="${escapeHtml(startUrl)}" target="_blank" rel="noopener">${escapeHtml(startUrl)}</a><div class="muted" style="margin-top:6px;">Candidate:</div><a class="mono" href="${escapeHtml(joinUrl)}" target="_blank" rel="noopener">${escapeHtml(joinUrl)}</a></div>`;
+        } else {
+          if (elOut) elOut.innerHTML = `<span class="ok">Meeting URL copied for slot ${slotId}.</span><br><a class="mono" href="${escapeHtml(preferredUrl)}" target="_blank" rel="noopener">${escapeHtml(preferredUrl)}</a>`;
+        }
       } catch {
-        if (elOut) elOut.innerHTML = `<span class="ok">Zoom URL for slot ${slotId}:</span><br><a class="mono" href="${escapeHtml(zoomUrl)}" target="_blank" rel="noopener">${escapeHtml(zoomUrl)}</a>`;
+        if (provider === "zoom" && startUrl && joinUrl && startUrl !== joinUrl) {
+          if (elOut) elOut.innerHTML = `<span class="ok">Zoom meeting URLs for slot ${slotId}:</span><div style="margin-top:6px;"><div class="muted">Host:</div><a class="mono" href="${escapeHtml(startUrl)}" target="_blank" rel="noopener">${escapeHtml(startUrl)}</a><div class="muted" style="margin-top:6px;">Candidate:</div><a class="mono" href="${escapeHtml(joinUrl)}" target="_blank" rel="noopener">${escapeHtml(joinUrl)}</a></div>`;
+        } else {
+          if (elOut) elOut.innerHTML = `<span class="ok">Meeting URL for slot ${slotId}:</span><br><a class="mono" href="${escapeHtml(preferredUrl)}" target="_blank" rel="noopener">${escapeHtml(preferredUrl)}</a>`;
+        }
       }
     }
   });

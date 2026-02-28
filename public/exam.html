@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/styles.css"/>
   <link rel="icon" href="/favicon.ico"/>
 </head>
-<body>
+<body class="test-page">
   <div class="topbar">
     <div class="topbar-inner">
       <div class="badge"><span>English Exam</span><span id="candidate" class="mono"></span></div>
@@ -25,8 +25,41 @@
 
       <div id="gate" style="display:none">
         <div class="hr"></div>
+        <h2>Remote proctoring notice</h2>
+        <div class="notice" id="proctoringNoticeText">
+          During this exam, your device camera will be used for invigilation and identity verification (human review).
+        </div>
+        <div class="small muted" id="proctoringMeta" style="margin-top:10px">
+          <span id="proctoringController"></span>
+          <span id="proctoringRetention"></span>
+          <a id="proctoringPrivacyLink" href="#" target="_blank" rel="noopener">Exam Proctoring Privacy Notice</a>
+        </div>
+        <div class="proctoringActions" style="margin-top:10px">
+          <button id="proctoringReadMore" type="button">Read here</button>
+        </div>
+        <div id="proctoringLongNotice" class="proctoringLong" style="display:none">
+          <h3 style="margin:0 0 8px 0">Exam Proctoring Privacy Notice</h3>
+          <div class="small">
+            <p><b>Controller</b>: <span id="proctoringControllerLong">[Educational organization]</span></p>
+            <p><b>Purpose</b>: To protect exam integrity, verify identity (human review), investigate suspected misconduct, and resolve disputes.</p>
+            <p><b>Data we collect</b>: Live camera stream for presence checks, periodic still images (if enabled), timestamps, exam session logs, and limited device/browser metadata (e.g., IP address and user agent).</p>
+            <p><b>Who can access</b>: Only authorized exam staff and our proctoring service provider acting on the controller’s instructions.</p>
+            <p><b>Retention</b>: Up to <span id="proctoringRetentionLong">[X]</span> days, then deletion/anonymization.</p>
+            <p><b>Legal basis</b>: The controller determines the legal basis (commonly legitimate interests and/or performance of a contract, depending on the exam rules).</p>
+            <p><b>Your rights</b>: You may have the right to access, erasure, restriction, objection, and portability, depending on your jurisdiction. Requests are handled by the controller.</p>
+            <p><b>Contact</b>: Please contact your educational organization for privacy requests or alternative arrangements (if available).</p>
+          </div>
+        </div>
+        <div style="margin-top:10px">
+          <label class="ackLabel" for="proctoringAck" id="proctoringAckLabel">
+            <input type="checkbox" id="proctoringAck"/>
+            <span>I have read and understood the Remote Proctoring Notice and the Exam Proctoring Privacy Notice.</span>
+          </label>
+        </div>
+
+        <div class="hr"></div>
         <h2>Camera check</h2>
-        <p>Camera access is required to start the exam. No recording is stored. The system checks that your face is visible.</p>
+        <p id="cameraCheckText">Camera access is required to start the exam. The system checks that your face is visible.</p>
 
         <div class="videoWrap">
           <div class="videoCard">
