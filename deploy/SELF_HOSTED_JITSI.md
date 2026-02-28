@@ -6,15 +6,15 @@ This setup keeps your existing app and Jitsi on the same host, in separate conta
 
 Point both records to your server public IP:
 
-- `english4sp.stinis.ddns.net`
-- `meet.english4sp.stinis.ddns.net`
+- `app.example.com`
+- `meet.example.com`
 
 ## 2) App (already prepared)
 
 `docker-compose.yml` now includes:
 
 - `SPEAKING_PROVIDER=selfhosted`
-- `SELF_HOSTED_JITSI_BASE_URL=https://meet.english4sp.stinis.ddns.net`
+- `SELF_HOSTED_JITSI_BASE_URL=https://meet.example.com`
 
 Deploy app as usual:
 
@@ -28,8 +28,8 @@ You can manage app + Jitsi together:
 
 ```bash
 sudo SERVER_IP=<YOUR_PUBLIC_IP> \
-     APP_DOMAIN=english4sp.stinis.ddns.net \
-     JITSI_DOMAIN=meet.english4sp.stinis.ddns.net \
+     APP_DOMAIN=app.example.com \
+     JITSI_DOMAIN=meet.example.com \
      bash deploy/stack/up.sh
 ```
 
@@ -37,8 +37,8 @@ Rebuild all:
 
 ```bash
 sudo SERVER_IP=<YOUR_PUBLIC_IP> \
-     APP_DOMAIN=english4sp.stinis.ddns.net \
-     JITSI_DOMAIN=meet.english4sp.stinis.ddns.net \
+     APP_DOMAIN=app.example.com \
+     JITSI_DOMAIN=meet.example.com \
      bash deploy/stack/rebuild.sh
 ```
 
@@ -53,7 +53,7 @@ sudo bash deploy/stack/down.sh
 Run bootstrap script on the server:
 
 ```bash
-sudo JITSI_DOMAIN=meet.english4sp.stinis.ddns.net SERVER_IP=<YOUR_PUBLIC_IP> bash deploy/jitsi/bootstrap.sh
+sudo JITSI_DOMAIN=meet.example.com SERVER_IP=<YOUR_PUBLIC_IP> bash deploy/jitsi/bootstrap.sh
 ```
 
 This will:
@@ -75,7 +75,7 @@ sudo ln -sf /etc/nginx/sites-available/english4sp.conf /etc/nginx/sites-enabled/
 Issue TLS certs (example with certbot):
 
 ```bash
-sudo certbot --nginx -d english4sp.stinis.ddns.net -d meet.english4sp.stinis.ddns.net
+sudo certbot --nginx -d app.example.com -d meet.example.com
 ```
 
 Then reload Nginx:
@@ -94,6 +94,6 @@ Allow:
 
 ## 6) Validate
 
-- App: `https://english4sp.stinis.ddns.net`
-- Jitsi: `https://meet.english4sp.stinis.ddns.net`
+- App: `https://app.example.com`
+- Jitsi: `https://meet.example.com`
 - Create candidate and verify speaking link opens meeting without external meeting API dependency.

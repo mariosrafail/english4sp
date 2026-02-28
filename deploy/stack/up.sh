@@ -9,7 +9,7 @@ set -euo pipefail
 #   sudo bash deploy/stack/up.sh
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-APP_DOMAIN="${APP_DOMAIN:-english4sp.stinis.ddns.net}"
+APP_DOMAIN="${APP_DOMAIN:-app.example.com}"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "ERROR: docker not found."

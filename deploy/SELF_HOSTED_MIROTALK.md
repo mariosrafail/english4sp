@@ -6,8 +6,8 @@ This setup runs your app and MiroTalk P2P on the same host with Docker Compose.
 
 Point both records to your server public IP:
 
-- `english4sp.stinis.ddns.net`
-- `meet.english4sp.stinis.ddns.net`
+- `app.example.com`
+- `meet.example.com`
 
 ## 2) Docker stack
 
@@ -16,7 +16,7 @@ Point both records to your server public IP:
 - `app` on `127.0.0.1:8080`
 - `mirotalk` on `127.0.0.1:3010`
 - `SPEAKING_PROVIDER=mirotalk_p2p`
-- `SELF_HOSTED_MIROTALK_BASE_URL=https://meet.english4sp.stinis.ddns.net`
+- `SELF_HOSTED_MIROTALK_BASE_URL=https://meet.example.com`
 
 Start:
 
@@ -54,7 +54,7 @@ sudo ln -sf /etc/nginx/sites-available/english4sp.conf /etc/nginx/sites-enabled/
 Issue TLS certs:
 
 ```bash
-sudo certbot --nginx -d english4sp.stinis.ddns.net -d meet.english4sp.stinis.ddns.net
+sudo certbot --nginx -d app.example.com -d meet.example.com
 ```
 
 Reload Nginx:
@@ -72,6 +72,6 @@ Allow:
 
 ## 5) Validate
 
-- App: `https://english4sp.stinis.ddns.net`
-- Meet: `https://meet.english4sp.stinis.ddns.net`
+- App: `https://app.example.com`
+- Meet: `https://meet.example.com`
 - In `speaking-scheduling.html`, run `Recreate meeting links` once to rotate old links.

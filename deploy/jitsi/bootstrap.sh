@@ -9,13 +9,13 @@ set -euo pipefail
 # - Exposes Jitsi web on localhost:8000 (for reverse proxy) and media on UDP 10000.
 # - TLS is expected to be terminated by Nginx/Caddy on the host.
 
-JITSI_DOMAIN="${JITSI_DOMAIN:-meet.english4sp.stinis.ddns.net}"
+JITSI_DOMAIN="${JITSI_DOMAIN:-meet.example.com}"
 SERVER_IP="${SERVER_IP:-}"
 JITSI_DIR="${JITSI_DIR:-/opt/jitsi-docker}"
 
 if [[ -z "$SERVER_IP" ]]; then
   echo "ERROR: SERVER_IP is required (public IPv4 used by Jitsi Videobridge)."
-  echo "Example: sudo JITSI_DOMAIN=meet.english4sp.stinis.ddns.net SERVER_IP=203.0.113.10 bash deploy/jitsi/bootstrap.sh"
+  echo "Example: sudo JITSI_DOMAIN=meet.example.com SERVER_IP=203.0.113.10 bash deploy/jitsi/bootstrap.sh"
   exit 1
 fi
 
