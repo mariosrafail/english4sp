@@ -1,4 +1,6 @@
 node_modules/
 .env
+Passwords.txt
+server.log
 public/uploads/
 storage/
