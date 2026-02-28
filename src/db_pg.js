@@ -1683,7 +1683,7 @@ async function getQuestionGrades(sessionId) {
   const row = await q1(
     `SELECT
         session_id AS "sessionId",
-        token,
+        public.question_grades.token AS "token",
         s.exam_period_id AS "examPeriodId",
         COALESCE(q_writing, '') AS "qWriting",
         COALESCE(answers_json, '{}'::jsonb) AS "answersJson",
@@ -1693,7 +1693,7 @@ async function getQuestionGrades(sessionId) {
         created_at_utc_ms AS "createdAtUtcMs"
      FROM public.question_grades
      JOIN public.sessions s ON s.id = public.question_grades.session_id
-     WHERE session_id = $1
+     WHERE public.question_grades.session_id = $1
      LIMIT 1;`,
     [sid]
   );
