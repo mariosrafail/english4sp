@@ -15,6 +15,8 @@ const elSingleOut = qs("#singleOut");
 
 const elExamPeriodTop = qs("#examPeriodSelectTop");
 const elCreate = qs("#btnCreateExamPeriod");
+const elRename = qs("#btnRenameExamPeriod");
+const elDuplicate = qs("#btnDuplicateExamPeriod");
 const elDelete = qs("#btnDeleteExamPeriod");
 const elOpenDT = qs("#openDT");
 const elOpenUtcPreview = qs("#openUtcPreview");
@@ -428,6 +430,98 @@ elCreate.addEventListener("click", async () => {
     elCfgOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
   } finally {
     elCreate.disabled = false;
+  }
+});
+
+elRename.addEventListener("click", async () => {
+  try {
+    elRename.disabled = true;
+    elCfgOut.innerHTML = "";
+
+    const id = getSelectedExamPeriodId();
+    const p = getPeriodById(id);
+    const currentName = String(p?.name || "").trim() || `Exam period ${id}`;
+
+    const nextRaw = await uiPrompt("Enter new exam period name.", currentName, { title: "Rename Exam Period" });
+    if (nextRaw === null) return;
+    const nextName = String(nextRaw || "").trim();
+    if (!nextName) throw new Error("Name is required");
+
+    const openMsFromPeriod = Number(p?.openAtUtc);
+    const durFromPeriod = Number(p?.durationMinutes);
+    const openMs = Number.isFinite(openMsFromPeriod) ? openMsFromPeriod : parseDatetimeLocalToMs(elOpenDT.value);
+    const durMinutes = Number.isFinite(durFromPeriod) && durFromPeriod > 0 ? Math.round(durFromPeriod) : Math.round(Number(elDurMin.value || 0));
+    if (openMs === null || !Number.isFinite(Number(openMs))) throw new Error("Invalid open date/time");
+    if (!Number.isFinite(durMinutes) || durMinutes <= 0) throw new Error("Invalid duration");
+
+    const r = await fetch(`/api/admin/exam-periods/${encodeURIComponent(id)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: nextName, openAtUtc: Number(openMs), durationMinutes: durMinutes }),
+      credentials: "same-origin",
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+
+    await loadExamPeriods(id);
+    elCfgOut.innerHTML = `<span class="ok">Renamed.</span>`;
+  } catch (e) {
+    elCfgOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
+  } finally {
+    elRename.disabled = false;
+  }
+});
+
+elDuplicate.addEventListener("click", async () => {
+  let createdId = null;
+  try {
+    elDuplicate.disabled = true;
+    elCfgOut.innerHTML = "";
+
+    const srcId = getSelectedExamPeriodId();
+    const src = getPeriodById(srcId);
+    const srcLabel = String(src?.name || "").trim() || `Exam period ${srcId}`;
+
+    const defaultName = `${srcLabel} (copy)`;
+    const nextRaw = await uiPrompt("Enter new exam period name.", defaultName, { title: "Duplicate Exam Period" });
+    if (nextRaw === null) return;
+    const nextName = String(nextRaw || "").trim();
+    if (!nextName) throw new Error("Name is required");
+
+    const now = Date.now();
+    const openSrc = Number(src?.openAtUtc);
+    const durSrc = Number(src?.durationMinutes);
+    const openAtUtc = Number.isFinite(openSrc) && openSrc > 0 ? Math.max(openSrc, now + 60 * 60 * 1000) : undefined;
+    const durationMinutes = Number.isFinite(durSrc) && durSrc > 0 ? Math.round(durSrc) : undefined;
+
+    const created = await apiPost("/api/admin/exam-periods", {
+      name: nextName,
+      ...(openAtUtc === undefined ? {} : { openAtUtc }),
+      ...(durationMinutes === undefined ? {} : { durationMinutes }),
+    });
+    createdId = Number(created?.id || 0);
+    if (!Number.isFinite(createdId) || createdId <= 0) throw new Error("Duplicate failed (missing new exam period id)");
+
+    const srcTestResp = await apiGet(`/api/admin/tests?examPeriodId=${encodeURIComponent(String(srcId))}`, { busy: false }).catch(() => null);
+    const srcTest = srcTestResp?.test || srcTestResp?.payload || null;
+    if (srcTest && typeof srcTest === "object") {
+      await apiPost(`/api/admin/tests?examPeriodId=${encodeURIComponent(String(createdId))}`, { test: srcTest }, { busy: false });
+    }
+
+    await loadExamPeriods(createdId);
+    elCfgOut.innerHTML = `<span class="ok">Duplicated.</span>`;
+  } catch (e) {
+    // Best-effort cleanup if we created the period but failed to copy its test.
+    if (createdId && Number.isFinite(Number(createdId))) {
+      try {
+        await fetch(`/api/admin/exam-periods/${encodeURIComponent(String(createdId))}`, { method: "DELETE", credentials: "same-origin" });
+      } catch {}
+    }
+    elCfgOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
+  } finally {
+    elDuplicate.disabled = false;
   }
 });
 

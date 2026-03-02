@@ -1322,6 +1322,15 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             ? uniq(dragCfg.bankWords)
             : uniq([...gapWords, ...extraWords]);
 
+          const shuffled = (arr)=>{
+            const a = (arr || []).slice();
+            for (let i = a.length - 1; i > 0; i--){
+              const j = Math.floor(Math.random() * (i + 1));
+              const t = a[i]; a[i] = a[j]; a[j] = t;
+            }
+            return a;
+          };
+
           if (gapWords.length && bankWords.length){
             const choiceIndexByWord = new Map(bankWords.map((w, i)=> [String(w).toLowerCase(), i]));
 
@@ -1383,7 +1392,8 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             bank.style.gap = "8px";
             bank.style.marginTop = "8px";
 
-            for (const word of bankWords){
+            const bankWordsDisplay = shuffled(bankWords);
+            for (const word of bankWordsDisplay){
               const chip = document.createElement("button");
               chip.type = "button";
               chip.className = "word-chip";
@@ -2069,6 +2079,10 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         const header = document.createElement("div");
         header.className = "q-title";
         header.textContent = item.prompt || "";
+        if (item.type === "writing"){
+          header.style.whiteSpace = "pre-wrap";
+          header.style.lineHeight = "1.5";
+        }
         q.appendChild(header);
 
         if (item.type === "mcq" || item.type === "listening-mcq"){

@@ -152,6 +152,18 @@
     frame.style.height = `${clamped}px`;
   }
 
+  function setFullscreenForFrame(frame, on) {
+    try {
+      for (const f of iframes()) {
+        f.classList.remove("admin-embed-frame--fullscreen");
+      }
+    } catch {}
+    // This message type is reserved but currently unused.
+    // Keep the behavior minimal to avoid darkening the whole admin UI.
+    void frame;
+    void on;
+  }
+
   window.addEventListener("message", (event) => {
     if (event.origin !== location.origin) return;
     const data = event.data || {};
@@ -208,6 +220,8 @@
       }
       return;
     }
+
+    if (data.type === "embed:fullscreen") return;
 
     if (data.type === "embed:dialog") {
       const id = String(data.id || "");

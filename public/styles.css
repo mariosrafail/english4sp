@@ -637,7 +637,7 @@ button.btnDanger:active{
 /* Question blocks */
 .q{border:var(--border);border-radius:var(--radius);padding:14px;background:#fff;margin:12px 0;transition:border-color 160ms ease}
 .q:hover{border-color:rgba(17,24,39,0.18)}
-.q-title{font-weight:800;margin:0 0 8px 0}
+.q-title{font-weight:800;margin:0 0 8px 0; white-space: pre-line}
 
 /* Choice as selectable card */
 .choice{

@@ -19,6 +19,29 @@ module.exports = function registerAdminTestsRoutes(app, ctx) {
     throw new Error("admin_tests_routes_missing_ctx");
   }
 
+  // Express v4 does not automatically catch promise rejections from async route handlers.
+  // If an async handler throws, Node may crash (and upstream reverse proxies return 502).
+  function asyncJson(handler) {
+    return (req, res) => {
+      Promise.resolve(handler(req, res)).catch((e) => {
+        const msg = e?.message || String(e);
+        try {
+          console.error("[admin-tests] handler error:", msg);
+          if (e?.stack) console.error(String(e.stack));
+        } catch {}
+        if (res.headersSent) return;
+        const m = String(msg || "");
+        const isExamPeriodErr =
+          m.startsWith("Invalid examPeriodId") ||
+          m.includes("Exam period") && m.includes("not found") ||
+          m.toLowerCase().includes("violates foreign key constraint") && m.toLowerCase().includes("exam_period");
+        const stack = e?.stack ? String(e.stack).slice(0, 6000) : "";
+        if (isExamPeriodErr) return res.status(400).json({ error: "invalid_exam_period", message: m, stack });
+        res.status(500).json({ error: "server_error", message: m, stack });
+      });
+    };
+  }
+
   const listeningUploadSessions = new Map(); // uploadId -> { examPeriodId, createdAt, chunkBytes, tmpDir }
 
   function parseChunkBytes(raw, fallback) {
@@ -82,19 +105,34 @@ module.exports = function registerAdminTestsRoutes(app, ctx) {
     return { locked, serverNow: now, openAtUtc, durationMinutes };
   }
 
-  app.get("/api/admin/tests", async (req, res) => {
+  async function assertExamPeriodExists(examPeriodId) {
+    const id = Number(examPeriodId);
+    if (!Number.isFinite(id) || id <= 0) throw new Error("Invalid examPeriodId");
+    if (typeof DB.listExamPeriods !== "function") return true;
+    const rows = await DB.listExamPeriods();
+    const eps = Array.isArray(rows) ? rows : [];
+    const ok = eps.some((r) => Number(r?.id || 0) === id);
+    if (!ok) {
+      const ids = eps.map((r) => Number(r?.id || 0)).filter((n) => Number.isFinite(n) && n > 0).slice(0, 50);
+      throw new Error(`Exam period ${id} not found${ids.length ? ` (available: ${ids.join(", ")})` : ""}`);
+    }
+    return true;
+  }
+
+  app.get("/api/admin/tests", asyncJson(async (req, res) => {
     await ensureInit();
     const a = await adminAuth(req, res);
     if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
     if (!DB.getAdminTest) return res.status(501).json({ error: "Not supported on this database adapter" });
     const ep = Number(req.query?.examPeriodId || 1);
     const examPeriodId = Number.isFinite(ep) && ep > 0 ? ep : 1;
+    await assertExamPeriodExists(examPeriodId);
     const test = await DB.getAdminTest(examPeriodId);
     const lock = await getTestLockState(examPeriodId);
     res.json({ ok: true, examPeriodId, test, ...lock });
-  });
+  }));
 
-  app.post("/api/admin/tests", async (req, res) => {
+  app.post("/api/admin/tests", asyncJson(async (req, res) => {
     await ensureInit();
     const a = await adminAuth(req, res);
     if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
@@ -128,16 +166,17 @@ module.exports = function registerAdminTestsRoutes(app, ctx) {
 
     const ep = Number(req.query?.examPeriodId || 1);
     const examPeriodId = Number.isFinite(ep) && ep > 0 ? ep : 1;
+    await assertExamPeriodExists(examPeriodId);
 
     const lock = await getTestLockState(examPeriodId);
     if (lock.locked) return res.status(423).json({ error: "locked", message: "Test is locked (already started).", examPeriodId, ...lock });
 
     const out = await DB.setAdminTest(examPeriodId, test);
     res.json({ ok: true, examPeriodId, ...out });
-  });
+  }));
 
   // Bootstrap endpoint to reduce round-trips (faster admin test builder load).
-  app.get("/api/admin/tests-bootstrap", async (req, res) => {
+  app.get("/api/admin/tests-bootstrap", asyncJson(async (req, res) => {
     await ensureInit();
     const a = await adminAuth(req, res);
     if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
@@ -153,7 +192,7 @@ module.exports = function registerAdminTestsRoutes(app, ctx) {
     const test = await DB.getAdminTest(examPeriodId);
     const lock = await getTestLockState(examPeriodId);
     res.json({ ok: true, examPeriods: rows, examPeriodId, test, ...lock });
-  });
+  }));
 
   app.post("/api/admin/listening-audio", (req, res) => {
     uploadListeningAudio.single("audio")(req, res, async (err) => {

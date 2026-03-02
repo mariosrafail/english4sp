@@ -227,6 +227,17 @@ module.exports = function registerSessionRoutes(app, ctx) {
       }
       if (!DB.issueListeningTicket) return res.status(501).json({ error: "Not supported on this database adapter" });
 
+      // Avoid consuming a play if the audio file is missing.
+      try {
+        if (typeof DB.getGateForToken === "function") {
+          const gate = await DB.getGateForToken(String(req.params.token || ""));
+          const examPeriodId = Number(gate?.examPeriodId || 1) || 1;
+          const rel = `listening/ep_${examPeriodId}/listening.mp3`;
+          const st = await Storage.statFile(rel);
+          if (!st.exists) return res.status(404).json({ error: "missing_listening_audio" });
+        }
+      } catch {}
+
       // Always enforce play-once server-side.
       const maxPlays = 1;
       const ttlMs = 25 * 60 * 1000;

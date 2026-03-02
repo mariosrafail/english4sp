@@ -107,6 +107,15 @@ function renderDragWords({ secEl, cfg }) {
     ? uniqPreserve(cfg.bankWords)
     : uniqPreserve([...gapWords, ...extraWords]);
 
+  const shuffled = (arr) => {
+    const a = (arr || []).slice();
+    for (let i = a.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const t = a[i]; a[i] = a[j]; a[j] = t;
+    }
+    return a;
+  };
+
   if (!gapWords.length || !bankWords.length) return { rendered: false, dragId: "" };
 
   const dragId = String(cfg?.id || "drag1") || "drag1";
@@ -170,7 +179,8 @@ function renderDragWords({ secEl, cfg }) {
   bank.style.gap = "8px";
   bank.style.marginTop = "8px";
 
-  for (const word of bankWords) {
+  const bankWordsDisplay = shuffled(bankWords);
+  for (const word of bankWordsDisplay) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "word-chip";
@@ -339,13 +349,16 @@ function renderTest(payload) {
 
     // Listening: shared audio player (play once), then auto-advance.
     if (secKind === "listening") {
-      const firstAudioItem = (sec.items || []).find((it) => it?.type === "listening-mcq" && it?.audioUrl);
-      if (firstAudioItem?.audioUrl) {
+      const hasListening = (sec.items || []).some((it) => it && (it.type === "listening-mcq" || it.type === "tf"));
+      if (hasListening) {
+        const examPeriodId = getExamPeriodId();
+        const rel = `listening/ep_${examPeriodId}/listening.mp3`;
+        const url = `/api/admin/files/download?path=${encodeURIComponent(rel)}`;
         const audioWrap = document.createElement("div");
         audioWrap.className = "q";
 
         const audio = document.createElement("audio");
-        audio.src = String(firstAudioItem.audioUrl);
+        audio.src = url;
         audio.preload = "auto";
         audio.controls = false;
 
@@ -453,6 +466,10 @@ function renderTest(payload) {
       const header = document.createElement("div");
       header.className = "q-title";
       header.textContent = item.prompt || "";
+      if (item.type === "writing") {
+        header.style.whiteSpace = "pre-line";
+        header.style.lineHeight = "1.5";
+      }
       q.appendChild(header);
 
       if (item.type === "mcq" || item.type === "listening-mcq") {

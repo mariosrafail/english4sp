@@ -28,7 +28,12 @@ export async function apiGet(url, { busy, busyText = "Loading..." } = {}){
       location.href = "/examiners.html";
       throw new Error("Not authenticated");
     }
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    if (!r.ok) {
+      const baseMsg = j.message || j.error || `HTTP ${r.status}`;
+      const stack = typeof j.stack === "string" && j.stack.trim() ? j.stack.trim() : "";
+      const stackShort = stack ? stack.split("\n").slice(0, 10).join("\n").slice(0, 2000) : "";
+      throw new Error(stackShort ? `${baseMsg}\n${stackShort}` : baseMsg);
+    }
     return j;
   } finally { stop(); }
 }
@@ -53,7 +58,12 @@ export async function apiPost(url, body, { busy, busyText = "Working..." } = {})
       location.href = "/examiners.html";
       throw new Error("Not authenticated");
     }
-    if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+    if (!r.ok) {
+      const baseMsg = j.message || j.error || `HTTP ${r.status}`;
+      const stack = typeof j.stack === "string" && j.stack.trim() ? j.stack.trim() : "";
+      const stackShort = stack ? stack.split("\n").slice(0, 10).join("\n").slice(0, 2000) : "";
+      throw new Error(stackShort ? `${baseMsg}\n${stackShort}` : baseMsg);
+    }
     return j;
   } finally { stop(); }
 }

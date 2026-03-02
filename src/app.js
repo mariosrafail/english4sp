@@ -482,7 +482,7 @@ function normalizeAdminTestPayload(test) {
   const p = test && typeof test === "object" ? test : {};
   const sectionsRaw = Array.isArray(p.sections) ? p.sections : [];
   const sections = sectionsRaw.slice(0, 8).map((sec, secIdx) => {
-    const s = sec && typeof s === "object" ? sec : {};
+    const s = sec && typeof sec === "object" ? sec : {};
     const id = String(s.id || "").trim().slice(0, 40) || `sec_${secIdx + 1}`;
     const title = String(s.title || "").trim().slice(0, 120) || "Section";
     const description = String(s.description || "").trim().slice(0, 600);

@@ -304,6 +304,9 @@ iframe.admin-embed-frame--flush{
   background:transparent;
 }
 
+/* Reserved: fullscreen embedded tools (currently unused). */
+iframe.admin-embed-frame.admin-embed-frame--fullscreen{ }
+
 .admin-danger{
   border-color:rgba(239,68,68,0.28);
   background: rgba(239,68,68,0.03);

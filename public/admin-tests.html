@@ -55,6 +55,22 @@
               <div class="small muted">Click a question on the right to edit.</div>
             </div>
 
+            <div id="listeningToolbar" style="margin-top:10px; display:none;">
+              <div class="d-flex gap-2 flex-wrap">
+                <button id="btnListeningNewQuestion" class="btn btn-primary btn-sm" type="button">Add new question</button>
+                <button id="btnListeningNewText" class="btn btn-outline-secondary btn-sm" type="button">Add new text box</button>
+              </div>
+              <div class="small muted mt-2">Edit opens in a full-screen window.</div>
+            </div>
+
+            <div id="readingToolbar" style="margin-top:10px; display:none;">
+              <div class="d-flex gap-2 flex-wrap">
+                <button id="btnReadingNewText" class="btn btn-primary btn-sm" type="button">New Reading text block</button>
+                <button id="btnReadingNewQuestion" class="btn btn-outline-secondary btn-sm" type="button">New question</button>
+              </div>
+              <div class="small muted mt-2">Edit opens in a full-screen window.</div>
+            </div>
+
             <div id="readingTextEditor" style="margin-top:10px; display:none;">
               <label class="form-label small muted">Reading text block</label>
               <div class="small muted" style="margin-top:-6px;">Tip: wrap any part in <span class="mono">**double asterisks**</span> to make it bold.</div>
@@ -66,25 +82,17 @@
             </div>
 
             <div id="mcqEditor" style="margin-top:10px;">
-              <div id="listeningAudioBox" class="alert alert-light border" style="display:none; margin-bottom:10px;">
-                <div class="fw-bold">Listening audio (MP3)</div>
-                <div class="small text-muted mt-1">Upload an MP3 and the exam will use it for this exam period.</div>
-                <div class="d-flex gap-2 align-items-center flex-wrap mt-2">
-                  <input id="listeningAudioFile" class="form-control form-control-sm" type="file" accept="audio/mpeg,audio/mp3,.mp3" style="max-width:420px;"/>
-                  <button id="btnUploadListeningAudio" class="btn btn-outline-primary btn-sm" type="button">Upload</button>
+              <div id="mcqFields">
+                <label class="form-label small muted">Question</label>
+                <textarea id="qText" class="form-control" rows="3" placeholder="Write the question..."></textarea>
+
+                <label class="form-label small muted mt-3">Options</label>
+                <div id="optionsBox" style="margin-top:6px;"></div>
+
+                <div class="d-flex gap-2 mt-2 flex-wrap">
+                  <button id="btnAddOption" class="btn btn-outline-secondary btn-sm" type="button">Add option</button>
+                  <button id="btnRemoveOption" class="btn btn-outline-secondary btn-sm" type="button">Remove last</button>
                 </div>
-                <div class="small text-muted mt-2" id="listeningAudioStatus"></div>
-              </div>
-
-              <label class="form-label small muted">Question</label>
-              <textarea id="qText" class="form-control" rows="3" placeholder="Write the question..."></textarea>
-
-              <label class="form-label small muted mt-3">Options</label>
-              <div id="optionsBox" style="margin-top:6px;"></div>
-
-              <div class="d-flex gap-2 mt-2 flex-wrap">
-                <button id="btnAddOption" class="btn btn-outline-secondary btn-sm" type="button">Add option</button>
-                <button id="btnRemoveOption" class="btn btn-outline-secondary btn-sm" type="button">Remove last</button>
               </div>
 
               <div class="d-flex gap-2 mt-3 flex-wrap">
@@ -141,10 +149,10 @@
 
         <div class="testsCol testsColRight">
           <div class="editorCard">
-            <div class="editorTitle">
-              <h3 class="mb-0">Questions</h3>
-              <div class="qListHint">Click a question to edit. Use Up/Down to reorder. Delete removes it (save to persist).</div>
-            </div>
+             <div class="editorTitle">
+               <h3 class="mb-0">Questions</h3>
+               <div class="qListHint">Click a question to edit. Drag (or use Up/Down) to reorder. Delete removes it (save to persist).</div>
+             </div>
 
             <div id="questionsList" style="margin-top:10px;">
               <div class="admin-q-panel" role="tabpanel" data-qpanel="listening">
@@ -159,6 +167,45 @@
             </div>
           </div>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="listeningModalOverlay" class="testsModalOverlay" style="display:none;">
+    <div id="listeningModalWindow" class="testsModalWindow" role="dialog" aria-modal="true" aria-label="Edit item">
+      <div class="testsModalHeader">
+        <div id="listeningModalTitle" class="testsModalTitle">Edit</div>
+        <button id="btnListeningModalClose" class="btn btn-outline-secondary btn-sm" type="button">Close</button>
+      </div>
+
+      <div class="testsModalBody">
+        <div id="listeningModalMcq">
+          <label class="form-label small muted">Question</label>
+          <textarea id="listeningModalQText" class="form-control" rows="3" placeholder="Write the question..."></textarea>
+
+          <label class="form-label small muted mt-3">Options</label>
+          <div id="listeningModalOptionsBox" style="margin-top:6px;"></div>
+
+          <div class="d-flex gap-2 mt-2 flex-wrap">
+            <button id="btnListeningModalAddOption" class="btn btn-outline-secondary btn-sm" type="button">Add option</button>
+            <button id="btnListeningModalRemoveOption" class="btn btn-outline-secondary btn-sm" type="button">Remove last</button>
+          </div>
+        </div>
+
+        <div id="listeningModalInfo" style="display:none;">
+          <label class="form-label small muted">Text box</label>
+          <div class="small muted" style="margin-top:-6px;">Tip: wrap any part in <span class="mono">**double asterisks**</span> to make it bold.</div>
+          <div class="d-flex gap-2 mt-2 flex-wrap align-items-center">
+            <button id="btnListeningModalBold" class="btn btn-outline-secondary btn-sm" type="button" title="Wrap selection in ** **"><span class="fw-bold">B</span></button>
+            <div class="small muted">Select text, then click <span class="fw-bold">B</span>.</div>
+          </div>
+          <textarea id="listeningModalInfoText" class="form-control mt-2" rows="8" placeholder="Text block here..."></textarea>
+        </div>
+      </div>
+
+      <div class="testsModalFooter d-flex gap-2 flex-wrap">
+        <button id="btnListeningModalSave" class="btn btn-primary btn-sm" type="button">Save</button>
+        <button id="btnListeningModalCancel" class="btn btn-outline-secondary btn-sm" type="button">Cancel</button>
       </div>
     </div>
   </div>

@@ -7,6 +7,31 @@ const elReadingTextEditor = qs("#readingTextEditor");
 const elDragEditor = qs("#dragEditor");
 const elWritingEditor = qs("#writingEditor");
 
+const elListeningToolbar = qs("#listeningToolbar");
+const elListeningNewQuestion = qs("#btnListeningNewQuestion");
+const elListeningNewText = qs("#btnListeningNewText");
+
+const elReadingToolbar = qs("#readingToolbar");
+const elReadingNewText = qs("#btnReadingNewText");
+const elReadingNewQuestion = qs("#btnReadingNewQuestion");
+
+const elListeningModalOverlay = qs("#listeningModalOverlay");
+const elListeningModalWindow = qs("#listeningModalWindow");
+const elListeningModalTitle = qs("#listeningModalTitle");
+const elListeningModalClose = qs("#btnListeningModalClose");
+const elListeningModalSave = qs("#btnListeningModalSave");
+const elListeningModalCancel = qs("#btnListeningModalCancel");
+const elListeningModalMcq = qs("#listeningModalMcq");
+const elListeningModalInfo = qs("#listeningModalInfo");
+const elListeningModalQText = qs("#listeningModalQText");
+const elListeningModalOptionsBox = qs("#listeningModalOptionsBox");
+const elListeningModalAddOption = qs("#btnListeningModalAddOption");
+const elListeningModalRemoveOption = qs("#btnListeningModalRemoveOption");
+const elListeningModalInfoText = qs("#listeningModalInfoText");
+const elListeningModalBold = qs("#btnListeningModalBold");
+
+const elMcqFields = qs("#mcqFields");
+
 const elQText = qs("#qText");
 const elOptionsBox = qs("#optionsBox");
 const elAddOption = qs("#btnAddOption");
@@ -18,11 +43,6 @@ const elClearItem = qs("#btnClearQuestion");
 const elReadingText = qs("#readingText");
 const elSaveReadingText = qs("#btnSaveReadingText");
 const elClearReadingText = qs("#btnClearReadingText");
-
-const elListeningAudioBox = qs("#listeningAudioBox");
-const elListeningAudioFile = qs("#listeningAudioFile");
-const elUploadListeningAudio = qs("#btnUploadListeningAudio");
-const elListeningAudioStatus = qs("#listeningAudioStatus");
 
 const elDragInstructions = qs("#dragInstructions");
 const elDragText = qs("#dragText");
@@ -52,9 +72,36 @@ let _payloadInitial = null; // for reset actions
 let _qTab = "listening";
 let _editingMcq = { sectionId: "listening", itemId: null };
 let _editingReadingTextId = null;
+let _editingInfo = { sectionId: "listening", itemId: null };
+let _editorMode = "mcq"; // "mcq" | "info"
 let _mcqLockMode = ""; // "", "tf"
 let _builderLocked = false;
 let _builderLockMeta = null;
+let _lastItemIdBySection = { listening: null, reading: null };
+let _listeningModalState = { open: false, sectionId: "listening", mode: "mcq", itemId: null, afterItemId: null };
+let _dndState = { dragging: false, sectionId: "", itemId: "", overCard: null, overAfter: false };
+
+function isEmbedded() {
+  try {
+    const sp = new URLSearchParams(location.search || "");
+    if (sp.get("embed") === "1") return true;
+  } catch {}
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+}
+
+function postParentFullscreen(on) {
+  try {
+    // Disabled: parent-level fullscreen/backdrop was darkening the whole admin UI.
+    void on;
+    return false;
+  } catch {
+    return false;
+  }
+}
 
 function setOut(msg, ok = true) {
   if (!elOut) return;
@@ -100,11 +147,18 @@ function applyBuilderLocked() {
     elRemoveOption,
     elSaveReadingText,
     elClearReadingText,
-    elUploadListeningAudio,
     elSaveDrag,
     elResetDrag,
     elSaveWriting,
     elResetWriting,
+    elListeningNewQuestion,
+    elListeningNewText,
+    elListeningModalClose,
+    elListeningModalSave,
+    elListeningModalCancel,
+    elListeningModalAddOption,
+    elListeningModalRemoveOption,
+    elListeningModalBold,
   ];
   for (const b of buttons) {
     try { if (b) b.disabled = locked; } catch {}
@@ -113,12 +167,13 @@ function applyBuilderLocked() {
   const inputs = [
     elQText,
     elReadingText,
-    elListeningAudioFile,
     elDragInstructions,
     elDragText,
     elDragExtras,
     elDragTitle,
     elWritingPrompt,
+    elListeningModalQText,
+    elListeningModalInfoText,
   ];
   for (const el of inputs) {
     try {
@@ -147,6 +202,36 @@ function applyBuilderLocked() {
     const when = fmtLocal(openAt);
     setOut(when ? `Locked (test started: ${when}).` : "Locked (test started).", false);
   }
+}
+
+function setEditorMode(mode) {
+  const m = String(mode || "").trim() === "info" ? "info" : "mcq";
+  _editorMode = m;
+
+  const isListening = _qTab === "listening";
+  const isInfo = isListening && m === "info"; // kept for compatibility with older state
+  const isReading = _qTab === "reading";
+
+  // Listening uses a modal editor; keep the inline editor for Reading only.
+  try { if (elListeningToolbar) elListeningToolbar.style.display = isListening ? "" : "none"; } catch {}
+  try { if (elReadingToolbar) elReadingToolbar.style.display = isReading ? "" : "none"; } catch {}
+  try {
+    // Hide inline editors for Listening/Reading (modal-only).
+    if (elReadingTextEditor) elReadingTextEditor.style.display = "none";
+    if (elMcqEditor) elMcqEditor.style.display = "none";
+  } catch {}
+
+  try {
+    // Options are irrelevant in info mode.
+    if (elAddOption) elAddOption.style.display = isInfo ? "none" : "";
+    if (elRemoveOption) elRemoveOption.style.display = isInfo ? "none" : "";
+  } catch {}
+
+  try {
+    if (elSaveItem) elSaveItem.style.display = isInfo ? "none" : "";
+    if (elNewQuestion) elNewQuestion.style.display = isInfo ? "none" : "";
+    if (elClearItem) elClearItem.style.display = isInfo ? "none" : "";
+  } catch {}
 }
 
 function normalizeText(s, maxLen) {
@@ -232,14 +317,13 @@ function applyEditorsForTab(tab) {
   const showReading = t === "reading";
   const showWriting = t === "writing";
 
-  if (elReadingTextEditor) elReadingTextEditor.style.display = showReading ? "" : "none";
-  if (elMcqEditor) elMcqEditor.style.display = (showListening || showReading) ? "" : "none";
+  if (elReadingTextEditor) elReadingTextEditor.style.display = "none";
+  if (elMcqEditor) elMcqEditor.style.display = "none";
   if (elDragEditor) elDragEditor.style.display = showWriting ? "" : "none";
   if (elWritingEditor) elWritingEditor.style.display = showWriting ? "" : "none";
-  if (elListeningAudioBox) elListeningAudioBox.style.display = showListening ? "" : "none";
 
-  if (showListening) renderListeningAudioStatus();
   if (showWriting && _payload) renderWritingEditorsFromPayload();
+  setEditorMode(_editorMode);
 }
 
 function renderOptions(choices = [], correctIndex = 0) {
@@ -301,6 +385,7 @@ function clearMcqForm() {
   if (elQText) elQText.value = "";
   renderOptions(["", "", "", ""], 0);
   setMcqLockMode("");
+  if (_qTab === "listening") setEditorMode("mcq");
 }
 
 function nextId(prefix, items) {
@@ -314,53 +399,9 @@ function nextId(prefix, items) {
 
 function sectionForKind(kind) {
   const k = String(kind || "").trim();
-  if (k === "listening") return { id: "listening", type: "listening-mcq", prefix: "l" };
   if (k === "reading") return { id: "reading", type: "mcq", prefix: "r" };
   if (k === "readingText") return { id: "reading", type: "info", prefix: "rt" };
   return { id: "reading", type: "mcq", prefix: "r" };
-}
-
-function getFirstListeningAudioUrl(payload) {
-  const p = payload && typeof payload === "object" ? payload : null;
-  const sec = p ? ensureSection(p, "listening", "Part 1: Listening") : null;
-  const item = sec ? (sec.items || []).find((it) => it && it.type === "listening-mcq" && String(it.audioUrl || "").trim()) : null;
-  return item ? String(item.audioUrl || "").trim() : "";
-}
-
-function setListeningAudioUrl(url) {
-  if (!_payload) return;
-  const v = String(url || "").trim();
-  const sec = ensureSection(_payload, "listening", "Part 1: Listening");
-  const first = (sec.items || []).find((it) => it && it.type === "listening-mcq") || null;
-  if (first) {
-    first.audioUrl = v;
-  } else {
-    sec.items = sec.items || [];
-    sec.items.unshift({
-      id: "l1",
-      type: "listening-mcq",
-      audioUrl: v,
-      prompt: "1. (Add your first listening question)",
-      choices: ["Option A", "Option B"],
-      correctIndex: 0,
-      points: 1,
-    });
-  }
-}
-
-function renderListeningAudioStatus() {
-  if (!elListeningAudioStatus || !_payload) return;
-  const url = getFirstListeningAudioUrl(_payload);
-  if (!url) {
-    elListeningAudioStatus.innerHTML = `<span class="muted">No audio uploaded yet.</span>`;
-    return;
-  }
-  elListeningAudioStatus.innerHTML =
-    `Current audio: ` +
-    `<a class="mono" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer" ` +
-    `style="word-break:break-all; overflow-wrap:anywhere; display:inline-block; max-width:100%;">` +
-    `${escapeHtml(url)}` +
-    `</a>`;
 }
 
 function getSectionItems(sectionId) {
@@ -369,11 +410,10 @@ function getSectionItems(sectionId) {
 }
 
 function upsertMcqFromForm() {
-  const defaultSectionId = _qTab === "listening" ? "listening" : "reading";
-  const sectionId = _editingMcq?.itemId ? String(_editingMcq.sectionId || defaultSectionId) : defaultSectionId;
-  const type = sectionId === "listening" ? "listening-mcq" : "mcq";
-  const prefix = sectionId === "listening" ? "l" : "r";
-  const sec = ensureSection(_payload, sectionId, sectionId === "listening" ? "Part 1: Listening" : "Part 2: Reading");
+  const sectionId = "reading";
+  const type = "mcq";
+  const prefix = "r";
+  const sec = ensureSection(_payload, sectionId, "Part 2: Reading");
 
   const { prompt, choices, correctIdx, nonEmpty } = readMcqForm();
   if (!prompt) return { ok: false, error: "Question prompt is required." };
@@ -413,7 +453,6 @@ function upsertMcqFromForm() {
     correctIndex: correctIdx,
     points: Number(existing?.points ?? 1) || 1,
   };
-  if (type === "listening-mcq" && existing?.audioUrl) item.audioUrl = String(existing.audioUrl);
 
   const idx = sec.items.findIndex((it) => String(it?.id || "") === String(itemId));
   if (idx >= 0) sec.items[idx] = item;
@@ -422,6 +461,171 @@ function upsertMcqFromForm() {
   _editingMcq = { sectionId, itemId };
   renderQuestionsList();
   return { ok: true };
+}
+
+let _listeningModalLockMode = ""; // "", "tf"
+
+function showListeningModal(show) {
+  const on = !!show;
+  _listeningModalState.open = on;
+  try { if (elListeningModalOverlay) elListeningModalOverlay.style.display = on ? "flex" : "none"; } catch {}
+  try { postParentFullscreen(on); } catch {}
+  if (!on) return;
+  try { elListeningModalWindow?.focus?.(); } catch {}
+}
+
+function setListeningModalMode(mode) {
+  const m = String(mode || "").trim() === "info" ? "info" : "mcq";
+  _listeningModalState.mode = m;
+  _listeningModalLockMode = "";
+  try {
+    if (elListeningModalMcq) elListeningModalMcq.style.display = m === "mcq" ? "" : "none";
+    if (elListeningModalInfo) elListeningModalInfo.style.display = m === "info" ? "" : "none";
+  } catch {}
+}
+
+function renderListeningModalOptions(choices = [], correctIndex = 0) {
+  const arr = Array.isArray(choices) ? choices : [];
+  const n = Math.max(2, Math.min(12, arr.length || 4));
+  const corr = Number.isFinite(Number(correctIndex)) ? Number(correctIndex) : 0;
+  const groupName = "listeningModalCorrectOpt";
+
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const checked = i === corr;
+    const val = String(arr[i] || "");
+    const rid = `listeningModalCorrectOpt_${i}`;
+    rows.push(`
+      <div class="optionRow" data-opt-idx="${i}" data-correct="${checked ? "1" : "0"}" style="margin-top:${i === 0 ? 0 : 8}px;">
+        <div class="input-group input-group-sm" style="flex:1 1 auto;">
+          <span class="input-group-text mono">${escapeHtml(optionLabel(i))}</span>
+          <input class="form-control optionText" type="text" placeholder="Option ${escapeHtml(optionLabel(i))}" value="${escapeHtml(val)}"/>
+        </div>
+        <div class="form-check m-0" style="flex:0 0 auto;">
+          <input class="form-check-input optionCorrect" id="${escapeHtml(rid)}" type="radio" name="${escapeHtml(groupName)}" ${checked ? "checked" : ""}/>
+          <label class="form-check-label small muted" for="${escapeHtml(rid)}" style="user-select:none; cursor:pointer;">Correct</label>
+          <span class="correctPill" aria-hidden="true">Selected</span>
+        </div>
+      </div>
+    `);
+  }
+  if (elListeningModalOptionsBox) elListeningModalOptionsBox.innerHTML = rows.join("");
+
+  const locked = _listeningModalLockMode === "tf";
+  try {
+    for (const inp of Array.from(elListeningModalOptionsBox?.querySelectorAll("input.optionText") || [])) {
+      inp.readOnly = locked;
+      inp.classList.toggle("mono", locked);
+    }
+    if (elListeningModalAddOption) elListeningModalAddOption.disabled = locked;
+    if (elListeningModalRemoveOption) elListeningModalRemoveOption.disabled = locked;
+  } catch {}
+}
+
+function readListeningModalMcqForm() {
+  const prompt = normalizeText(elListeningModalQText?.value, 800);
+  const optRows = Array.from(elListeningModalOptionsBox?.querySelectorAll(".optionRow") || []);
+  const optionTexts = optRows.map((row) => normalizeText(row.querySelector("input.optionText")?.value, 240));
+  let correctIdx = optRows.findIndex((row) => row.querySelector("input.optionCorrect")?.checked);
+  if (correctIdx < 0) correctIdx = optRows.findIndex((row) => String(row.getAttribute("data-correct") || "") === "1");
+  const nonEmpty = optionTexts.filter((c) => c.trim()).length;
+  return { prompt, choices: optionTexts, correctIdx, nonEmpty };
+}
+
+function openListeningModal({ sectionId, mode, itemId = null, afterItemId = null } = {}) {
+  if (!_payload) return;
+  if (_builderLocked) return setOut("Locked: test has started.", false);
+
+  const secId = String(sectionId || "listening");
+  const secTitle = secId === "reading" ? "Part 2: Reading" : "Part 1: Listening";
+  const sec = ensureSection(_payload, secId, secTitle);
+  sec.items = Array.isArray(sec.items) ? sec.items : [];
+
+  _listeningModalState = { open: true, sectionId: secId, mode: mode === "info" ? "info" : "mcq", itemId, afterItemId };
+  setListeningModalMode(_listeningModalState.mode);
+
+  if (_listeningModalState.mode === "mcq") {
+    const existing = itemId ? sec.items.find((it) => String(it?.id || "") === String(itemId)) : null;
+    const label = secId === "reading" ? "reading" : "listening";
+    if (elListeningModalTitle) elListeningModalTitle.textContent = existing ? `Edit ${label} question` : `New ${label} question`;
+    if (elListeningModalQText) elListeningModalQText.value = String(existing?.prompt || "");
+
+    if (existing && String(existing.type || "") === "tf") {
+      _listeningModalLockMode = "tf";
+      renderListeningModalOptions(["True", "False"], existing.correct ? 0 : 1);
+    } else {
+      _listeningModalLockMode = "";
+      renderListeningModalOptions(Array.isArray(existing?.choices) ? existing.choices : ["", "", "", ""], Number(existing?.correctIndex || 0));
+    }
+  } else {
+    const existing = itemId ? sec.items.find((it) => String(it?.id || "") === String(itemId)) : null;
+    const label = secId === "reading" ? "reading" : "listening";
+    if (elListeningModalTitle) elListeningModalTitle.textContent = existing ? `Edit ${label} text box` : `New ${label} text box`;
+    if (elListeningModalInfoText) elListeningModalInfoText.value = String(existing?.prompt || "");
+  }
+
+  showListeningModal(true);
+}
+
+async function saveListeningModal() {
+  if (!_payload) return;
+  const secId = String(_listeningModalState?.sectionId || "listening");
+  const secTitle = secId === "reading" ? "Part 2: Reading" : "Part 1: Listening";
+  const sec = ensureSection(_payload, secId, secTitle);
+  sec.items = Array.isArray(sec.items) ? sec.items : [];
+
+  const { mode, itemId, afterItemId } = _listeningModalState || {};
+
+  if (mode === "info") {
+    const prompt = String(elListeningModalInfoText?.value || "").trim();
+    if (!prompt) throw new Error("Text box is required.");
+    const id = itemId || nextId(secId === "reading" ? "rt" : "li", sec.items);
+    const item = { id: String(id), type: "info", prompt, points: 0 };
+
+    const idx = sec.items.findIndex((it) => String(it?.id || "") === String(id));
+    if (idx >= 0) sec.items[idx] = item;
+    else {
+      const j = afterItemId ? sec.items.findIndex((it) => String(it?.id || "") === String(afterItemId)) : -1;
+      if (j >= 0) sec.items.splice(j + 1, 0, item);
+      else sec.items.push(item);
+    }
+
+    _lastItemIdBySection[secId] = String(id);
+  } else {
+    const { prompt, choices, correctIdx, nonEmpty } = readListeningModalMcqForm();
+    if (!prompt) throw new Error("Question prompt is required.");
+    if (correctIdx < 0) throw new Error("Pick the correct option.");
+
+    const id = itemId || nextId(secId === "reading" ? "r" : "l", sec.items);
+    const existing = sec.items.find((it) => String(it?.id || "") === String(id)) || null;
+    const isTf = String(existing?.type || "") === "tf" || _listeningModalLockMode === "tf";
+
+    let item = null;
+    if (isTf) {
+      const idx = Number(correctIdx);
+      if (!(idx === 0 || idx === 1)) throw new Error("True/False questions must have exactly 2 options.");
+      item = { id: String(id), type: "tf", prompt, correct: idx === 0, points: Number(existing?.points ?? 1) || 1 };
+    } else {
+      if (nonEmpty < 2) throw new Error("Add at least 2 options.");
+      if (!choices[correctIdx] || !String(choices[correctIdx]).trim()) throw new Error("Correct option cannot be empty.");
+      item = { id: String(id), type: secId === "reading" ? "mcq" : "listening-mcq", prompt, choices: choices.map((c) => c || ""), correctIndex: correctIdx, points: Number(existing?.points ?? 1) || 1 };
+    }
+
+    const idx = sec.items.findIndex((it) => String(it?.id || "") === String(id));
+    if (idx >= 0) sec.items[idx] = item;
+    else {
+      const j = afterItemId ? sec.items.findIndex((it) => String(it?.id || "") === String(afterItemId)) : -1;
+      if (j >= 0) sec.items.splice(j + 1, 0, item);
+      else sec.items.push(item);
+    }
+
+    _lastItemIdBySection[secId] = String(id);
+  }
+
+  renderQuestionsList();
+  await saveTest();
+  showListeningModal(false);
+  setOut("Saved.", true);
 }
 
 function clearReadingTextForm() {
@@ -451,6 +655,14 @@ function deleteItem(sectionId, itemId) {
   const sec = ensureSection(_payload, sectionId, sectionId);
   sec.items = (sec.items || []).filter((it) => String(it?.id || "") !== String(itemId));
   if (String(sectionId) === "reading" && String(_editingReadingTextId || "") === String(itemId)) clearReadingTextForm();
+  if (String(sectionId) === "listening") {
+    if (String(_listeningModalState?.itemId || "") === String(itemId)) showListeningModal(false);
+    if (String(_lastItemIdBySection.listening || "") === String(itemId)) _lastItemIdBySection.listening = null;
+  }
+  if (String(sectionId) === "reading") {
+    if (String(_listeningModalState?.itemId || "") === String(itemId)) showListeningModal(false);
+    if (String(_lastItemIdBySection.reading || "") === String(itemId)) _lastItemIdBySection.reading = null;
+  }
   if (String(_editingMcq.sectionId) === String(sectionId) && String(_editingMcq.itemId || "") === String(itemId)) clearMcqForm();
   renderQuestionsList();
 }
@@ -470,13 +682,45 @@ function moveItem(sectionId, itemId, dir) {
   renderQuestionsList();
 }
 
+function moveItemTo(sectionId, itemId, targetItemId, after = false) {
+  const sec = ensureSection(_payload, sectionId, sectionId);
+  const items = Array.isArray(sec.items) ? sec.items.slice() : [];
+  const fromId = String(itemId || "");
+  const toId = String(targetItemId || "");
+  if (!fromId || !toId || fromId === toId) return false;
+
+  const fromIdx = items.findIndex((it) => String(it?.id || "") === fromId);
+  const toIdxRaw = items.findIndex((it) => String(it?.id || "") === toId);
+  if (fromIdx < 0 || toIdxRaw < 0) return false;
+
+  const [moved] = items.splice(fromIdx, 1);
+  let toIdx = toIdxRaw;
+  if (fromIdx < toIdx) toIdx -= 1;
+  if (after) toIdx += 1;
+  toIdx = Math.max(0, Math.min(items.length, toIdx));
+  items.splice(toIdx, 0, moved);
+  sec.items = items;
+  renderQuestionsList();
+  return true;
+}
+
 function loadItemIntoEditor(sectionId, itemId) {
   const sec = ensureSection(_payload, sectionId, sectionId);
   const it = (sec.items || []).find((x) => String(x?.id || "") === String(itemId));
   if (!it) return;
 
-  if (sectionId === "listening") setQuestionsTab("listening");
-  else if (sectionId === "reading") setQuestionsTab("reading");
+  if (sectionId === "listening") {
+    setQuestionsTab("listening");
+    _lastItemIdBySection.listening = String(itemId || "");
+    openListeningModal({ sectionId: "listening", mode: it.type === "info" ? "info" : "mcq", itemId: String(itemId || "") });
+    return;
+  }
+  else if (sectionId === "reading") {
+    setQuestionsTab("reading");
+    _lastItemIdBySection.reading = String(itemId || "");
+    openListeningModal({ sectionId: "reading", mode: it.type === "info" ? "info" : "mcq", itemId: String(itemId || "") });
+    return;
+  }
   else if (sectionId === "writing") setQuestionsTab("writing");
 
   if (it.type === "info") {
@@ -768,6 +1012,7 @@ function renderQuestionsList() {
               </div>
               <div class="qActions">
                 <button class="btn btn-outline-secondary btn-sm" data-action="edit" data-section="${escapeHtml(sec.id)}" data-qid="${id}" type="button">Edit</button>
+                <button class="btn btn-outline-secondary btn-sm testsDragHandle" data-action="drag" data-section="${escapeHtml(sec.id)}" data-qid="${id}" type="button" draggable="true" aria-label="Drag to reorder" title="Drag to reorder">↕</button>
                 <button class="btn btn-outline-secondary btn-sm" data-action="up" data-section="${escapeHtml(sec.id)}" data-qid="${id}" type="button">Up</button>
                 <button class="btn btn-outline-secondary btn-sm" data-action="down" data-section="${escapeHtml(sec.id)}" data-qid="${id}" type="button">Down</button>
                 <button class="btn btn-outline-danger btn-sm" data-action="delete" data-section="${escapeHtml(sec.id)}" data-qid="${id}" type="button">Delete</button>
@@ -800,6 +1045,7 @@ function renderQuestionsList() {
                 </div>
                 <div class="qActions">
                   <button class="btn btn-outline-secondary btn-sm" data-action="edit" data-section="reading" data-qid="${id}" type="button">Edit</button>
+                  <button class="btn btn-outline-secondary btn-sm testsDragHandle" data-action="drag" data-section="reading" data-qid="${id}" type="button" draggable="true" aria-label="Drag to reorder" title="Drag to reorder">↕</button>
                   <button class="btn btn-outline-secondary btn-sm" data-action="up" data-section="reading" data-qid="${id}" type="button">Up</button>
                   <button class="btn btn-outline-secondary btn-sm" data-action="down" data-section="reading" data-qid="${id}" type="button">Down</button>
                   <button class="btn btn-outline-danger btn-sm" data-action="delete" data-section="reading" data-qid="${id}" type="button">Delete</button>
@@ -828,6 +1074,7 @@ function renderQuestionsList() {
               </div>
               <div class="qActions">
                 <button class="btn btn-outline-secondary btn-sm" data-action="edit" data-section="reading" data-qid="${id}" type="button">Edit</button>
+                <button class="btn btn-outline-secondary btn-sm testsDragHandle" data-action="drag" data-section="reading" data-qid="${id}" type="button" draggable="true" aria-label="Drag to reorder" title="Drag to reorder">↕</button>
                 <button class="btn btn-outline-secondary btn-sm" data-action="up" data-section="reading" data-qid="${id}" type="button">Up</button>
                 <button class="btn btn-outline-secondary btn-sm" data-action="down" data-section="reading" data-qid="${id}" type="button">Down</button>
                 <button class="btn btn-outline-danger btn-sm" data-action="delete" data-section="reading" data-qid="${id}" type="button">Delete</button>
@@ -840,6 +1087,76 @@ function renderQuestionsList() {
       : `<div class="muted">No reading items.</div>`;
 
     return `<h3 style="margin:14px 0 8px 0;">Reading</h3>${body}`;
+  };
+
+  const renderListeningMixed = () => {
+    const secId = "listening";
+    const items = (listening.items || []).filter((it) => it && (it.type === "info" || it.type === "listening-mcq" || it.type === "tf"));
+    if (!items.length) return `<div class="muted">No listening items.</div>`;
+
+    const renderInfoCard = (it) => {
+      const id = escapeHtml(String(it.id || ""));
+      const txt = String(it.prompt || "");
+      const preview = escapeHtml(txt.length > 220 ? `${txt.slice(0, 220)}...` : txt);
+      return `
+        <div class="qCard" data-section="${secId}" data-qid="${id}" style="cursor:pointer;">
+          <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+            <div style="min-width:0;">
+              <div class="small muted">Listening &middot; Text block</div>
+              <div class="small muted" style="margin-top:6px; white-space:pre-wrap;">${preview || "(empty)"}</div>
+            </div>
+            <div class="qActions">
+              <button class="btn btn-outline-secondary btn-sm" data-action="edit" data-section="${secId}" data-qid="${id}" type="button">Edit</button>
+              <button class="btn btn-outline-secondary btn-sm testsDragHandle" data-action="drag" data-section="${secId}" data-qid="${id}" type="button" draggable="true" aria-label="Drag to reorder" title="Drag to reorder">↕</button>
+              <button class="btn btn-outline-secondary btn-sm" data-action="up" data-section="${secId}" data-qid="${id}" type="button">Up</button>
+              <button class="btn btn-outline-secondary btn-sm" data-action="down" data-section="${secId}" data-qid="${id}" type="button">Down</button>
+              <button class="btn btn-outline-danger btn-sm" data-action="delete" data-section="${secId}" data-qid="${id}" type="button">Delete</button>
+            </div>
+          </div>
+        </div>
+      `;
+    };
+
+    const renderMcqCard = (it, qNo) => {
+      const id = escapeHtml(String(it.id || ""));
+      const prompt = escapeHtml(String(it.prompt || ""));
+      const isTf = it.type === "tf";
+      const choices = isTf ? ["True", "False"] : (Array.isArray(it.choices) ? it.choices : []);
+      const corr = isTf ? (it.correct ? 0 : 1) : (Number.isFinite(Number(it.correctIndex)) ? Number(it.correctIndex) : -1);
+      const preview = choices.slice(0, 6).map((c, i) => {
+        const isC = i === corr;
+        const cl = isC ? "ok" : "muted";
+        return `<div class="${cl} small mono">${escapeHtml(optionLabel(i))}. ${escapeHtml(String(c || ""))}</div>`;
+      }).join("");
+
+      return `
+        <div class="qCard" data-section="${secId}" data-qid="${id}" style="cursor:pointer;">
+          <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
+            <div style="min-width:0;">
+              <div class="small muted">Listening &middot; Question ${escapeHtml(String(qNo))}</div>
+              <div class="qCardTitle">${prompt || "(empty)"}</div>
+            </div>
+            <div class="qActions">
+              <button class="btn btn-outline-secondary btn-sm" data-action="edit" data-section="${secId}" data-qid="${id}" type="button">Edit</button>
+              <button class="btn btn-outline-secondary btn-sm testsDragHandle" data-action="drag" data-section="${secId}" data-qid="${id}" type="button" draggable="true" aria-label="Drag to reorder" title="Drag to reorder">↕</button>
+              <button class="btn btn-outline-secondary btn-sm" data-action="up" data-section="${secId}" data-qid="${id}" type="button">Up</button>
+              <button class="btn btn-outline-secondary btn-sm" data-action="down" data-section="${secId}" data-qid="${id}" type="button">Down</button>
+              <button class="btn btn-outline-danger btn-sm" data-action="delete" data-section="${secId}" data-qid="${id}" type="button">Delete</button>
+            </div>
+          </div>
+          <div class="qPreview">${preview}</div>
+        </div>
+      `;
+    };
+
+    let qNo = 0;
+    const body = items.map((it) => {
+      if (it.type === "info") return renderInfoCard(it);
+      qNo += 1;
+      return renderMcqCard(it, qNo);
+    }).join("");
+
+    return `<h3 style="margin:14px 0 8px 0;">Listening</h3>${body}`;
   };
 
   const writingSummary = (() => {
@@ -864,7 +1181,7 @@ function renderQuestionsList() {
     `;
   })();
 
-  if (elQuestionsListening) elQuestionsListening.innerHTML = renderSection(listening, "Listening");
+  if (elQuestionsListening) elQuestionsListening.innerHTML = renderListeningMixed();
   if (elQuestionsReading) elQuestionsReading.innerHTML = renderReading();
   if (elQuestionsWriting) elQuestionsWriting.innerHTML = writingSummary;
 }
@@ -901,7 +1218,6 @@ async function loadTest() {
   ensureWritingDefaults();
   _payloadInitial = cloneJson(_payload);
   renderWritingEditorsFromPayload();
-  renderListeningAudioStatus();
   renderQuestionsList();
   applyEditorsForTab(_qTab || "listening");
   applyBuilderLocked();
@@ -960,7 +1276,6 @@ async function bootstrap() {
   ensureWritingDefaults();
   _payloadInitial = cloneJson(_payload);
   renderWritingEditorsFromPayload();
-  renderListeningAudioStatus();
   renderQuestionsList();
   applyEditorsForTab(_qTab || "listening");
   applyBuilderLocked();
@@ -1009,84 +1324,6 @@ function wireEvents() {
   elDragInstructions?.addEventListener("input", onDragInput);
   elDragText?.addEventListener("input", onDragInput);
   elDragExtras?.addEventListener("input", onDragInput);
-
-  elUploadListeningAudio?.addEventListener("click", async () => {
-    try {
-      if (_builderLocked) throw new Error("Locked: test has started.");
-      const ep = getSelectedExamPeriodId();
-      if (!ep) throw new Error("Select an exam period first.");
-      const f = elListeningAudioFile?.files && elListeningAudioFile.files[0] ? elListeningAudioFile.files[0] : null;
-      if (!f) throw new Error("Pick an MP3 file first.");
-      const stop = busyStart("Uploading...");
-      const j = await (async () => {
-        async function uploadChunked(chunkBytes) {
-          const init = await fetch(`/api/admin/listening-audio/chunk/init?examPeriodId=${encodeURIComponent(String(ep))}`, {
-            method: "POST",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: f.name || "listening.mp3", size: Number(f.size || 0), chunkBytes }),
-          });
-          const ij = await init.json().catch(() => ({}));
-          if (!init.ok) throw new Error(String(ij?.message || ij?.error || `Init failed (${init.status})`));
-          const uploadId = String(ij?.uploadId || "").trim();
-          const negotiated = Number(ij?.chunkBytes || chunkBytes);
-          if (!uploadId) throw new Error("Chunk init failed (missing uploadId).");
-
-          const totalBytes = Number(f.size || 0);
-          const chunkSize = Math.max(64 * 1024, Number.isFinite(negotiated) ? negotiated : chunkBytes);
-          const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
-
-          for (let i = 0; i < totalChunks; i++) {
-            const start = i * chunkSize;
-            const end = Math.min(totalBytes, start + chunkSize);
-            const blob = f.slice(start, end);
-            const r = await fetch(`/api/admin/listening-audio/chunk/part?uploadId=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(i))}`, {
-              method: "POST",
-              credentials: "same-origin",
-              headers: { "Content-Type": "application/octet-stream" },
-              body: blob,
-            });
-            if (r.status === 413) throw Object.assign(new Error("Chunk too large (413)"), { code: "chunk_413" });
-            const pj = await r.json().catch(() => ({}));
-            if (!r.ok) throw new Error(String(pj?.message || pj?.error || `Chunk failed (${r.status})`));
-          }
-
-          const fin = await fetch(`/api/admin/listening-audio/chunk/complete`, {
-            method: "POST",
-            credentials: "same-origin",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ uploadId, totalChunks, totalBytes }),
-          });
-          const fj = await fin.json().catch(() => ({}));
-          if (!fin.ok) throw new Error(String(fj?.message || fj?.error || `Complete failed (${fin.status})`));
-          return fj;
-        }
-
-        const sizes = [900 * 1024, 512 * 1024, 256 * 1024, 128 * 1024];
-        let lastErr = null;
-        for (const sz of sizes) {
-          try {
-            return await uploadChunked(sz);
-          } catch (e) {
-            lastErr = e;
-            if (String(e?.code || "") === "chunk_413") continue;
-            throw e;
-          }
-        }
-        throw lastErr || new Error("Upload failed.");
-      })().finally(() => stop());
-      const url = String(j?.url || "").trim();
-      if (!url) throw new Error("Upload succeeded but no URL was returned.");
-
-      setListeningAudioUrl(url);
-      await saveTest();
-      renderListeningAudioStatus();
-      if (elListeningAudioFile) elListeningAudioFile.value = "";
-      setOut(`Audio uploaded (${String(j?.provider || "ok")}).`, true);
-    } catch (e) {
-      setOut(e?.message || "Upload failed.", false);
-    }
-  });
 
   elExamPeriod?.addEventListener("change", async () => {
     try {
@@ -1180,6 +1417,116 @@ function wireEvents() {
     setOut("New question.", true);
   });
 
+  // Listening modal (questions + text boxes)
+  elListeningNewQuestion?.addEventListener("click", () => {
+    if (_qTab !== "listening") setQuestionsTab("listening");
+    openListeningModal({ sectionId: "listening", mode: "mcq", itemId: null, afterItemId: _lastItemIdBySection.listening });
+  });
+
+  elListeningNewText?.addEventListener("click", () => {
+    if (_qTab !== "listening") setQuestionsTab("listening");
+    openListeningModal({ sectionId: "listening", mode: "info", itemId: null, afterItemId: _lastItemIdBySection.listening });
+  });
+
+  // Reading modal (text blocks + questions)
+  elReadingNewText?.addEventListener("click", () => {
+    if (_qTab !== "reading") setQuestionsTab("reading");
+    openListeningModal({ sectionId: "reading", mode: "info", itemId: null, afterItemId: _lastItemIdBySection.reading });
+  });
+
+  elReadingNewQuestion?.addEventListener("click", () => {
+    if (_qTab !== "reading") setQuestionsTab("reading");
+    openListeningModal({ sectionId: "reading", mode: "mcq", itemId: null, afterItemId: _lastItemIdBySection.reading });
+  });
+
+  const closeListeningModal = () => {
+    showListeningModal(false);
+    setOut("Canceled.", true);
+  };
+
+  elListeningModalClose?.addEventListener("click", closeListeningModal);
+  elListeningModalCancel?.addEventListener("click", closeListeningModal);
+
+  document.addEventListener("keydown", (e) => {
+    if (!_listeningModalState?.open) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeListeningModal();
+    }
+  });
+
+  elListeningModalSave?.addEventListener("click", async () => {
+    try {
+      await saveListeningModal();
+    } catch (e) {
+      setOut(e?.message || "Save failed.", false);
+    }
+  });
+
+  elListeningModalAddOption?.addEventListener("click", () => {
+    const cur = readListeningModalMcqForm();
+    const choices = Array.isArray(cur.choices) ? cur.choices.slice() : [];
+    if (choices.length >= 12) return;
+    choices.push("");
+    renderListeningModalOptions(choices, Math.max(0, cur.correctIdx));
+  });
+
+  elListeningModalRemoveOption?.addEventListener("click", () => {
+    const cur = readListeningModalMcqForm();
+    const choices = Array.isArray(cur.choices) ? cur.choices.slice() : [];
+    if (choices.length <= 2) return;
+    choices.pop();
+    const nextCorr = Math.max(0, Math.min(cur.correctIdx, choices.length - 1));
+    renderListeningModalOptions(choices, nextCorr);
+  });
+
+  elListeningModalOptionsBox?.addEventListener("change", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    const radio = target.closest("input.optionCorrect");
+    if (!radio) return;
+
+    const rows = Array.from(elListeningModalOptionsBox.querySelectorAll(".optionRow"));
+    for (const row of rows) row.setAttribute("data-correct", "0");
+    const parent = radio.closest(".optionRow");
+    if (parent) parent.setAttribute("data-correct", "1");
+  });
+
+  elListeningModalOptionsBox?.addEventListener("click", (e) => {
+    const target = e.target;
+    if (!(target instanceof HTMLElement)) return;
+    if (target.closest("input.optionText")) return;
+
+    const row = target.closest(".optionRow");
+    if (!row || !elListeningModalOptionsBox.contains(row)) return;
+    const radio = row.querySelector("input.optionCorrect");
+    if (!(radio instanceof HTMLInputElement)) return;
+    radio.checked = true;
+    radio.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  elListeningModalBold?.addEventListener("click", () => {
+    const ta = elListeningModalInfoText;
+    if (!(ta instanceof HTMLTextAreaElement)) return;
+    if (_builderLocked) return;
+    const start = Number.isFinite(Number(ta.selectionStart)) ? ta.selectionStart : 0;
+    const end = Number.isFinite(Number(ta.selectionEnd)) ? ta.selectionEnd : start;
+    const src = String(ta.value || "");
+    const before = src.slice(0, start);
+    const sel = src.slice(start, end);
+    const after = src.slice(end);
+    if (!sel) {
+      ta.value = before + "****" + after;
+      const pos = start + 2;
+      try { ta.setSelectionRange(pos, pos); } catch {}
+      try { ta.focus(); } catch {}
+      return;
+    }
+    ta.value = before + `**${sel}**` + after;
+    try { ta.setSelectionRange(start + 2, end + 2); } catch {}
+    try { ta.focus(); } catch {}
+  });
+
   elSaveDrag?.addEventListener("click", async () => {
     try {
       const r = saveDragFromEditor();
@@ -1234,6 +1581,7 @@ function wireEvents() {
       const act = btn.dataset.action;
       const sectionId = btn.dataset.section;
       const qid = btn.dataset.qid;
+      if (act === "drag") return;
       if (act === "edit") {
         loadItemIntoEditor(sectionId, qid);
         setOut("Loaded into editor.", true);
@@ -1253,7 +1601,7 @@ function wireEvents() {
       }
     }
 
-    const qEl = e.target?.closest?.("[data-qid][data-section]");
+    const qEl = e.target?.closest?.(".qCard[data-qid][data-section]");
     if (qEl) {
       const sectionId = String(qEl.dataset.section || "");
       const qid = String(qEl.dataset.qid || "");
@@ -1275,6 +1623,85 @@ function wireEvents() {
       loadItemIntoEditor(sectionId, qid);
       setOut("Loaded into editor.", true);
     }
+  });
+
+  const clearDndVisuals = () => {
+    try {
+      for (const c of Array.from(elQuestionsList?.querySelectorAll(".qCard") || [])) {
+        c.classList.remove("qCard--drop-before", "qCard--drop-after", "qCard--dragging");
+      }
+    } catch {}
+    _dndState = { dragging: false, sectionId: "", itemId: "", overCard: null, overAfter: false };
+  };
+
+  elQuestionsList?.addEventListener("dragstart", (e) => {
+    const handle = e.target?.closest?.('button[data-action="drag"][draggable="true"]');
+    if (!handle) return;
+    if (_builderLocked) {
+      try { e.preventDefault(); } catch {}
+      return setOut("Locked: test has started.", false);
+    }
+
+    const card = handle.closest?.(".qCard[data-section][data-qid]");
+    if (!card) return;
+    const sectionId = String(card.dataset.section || "");
+    const itemId = String(card.dataset.qid || "");
+    if (!sectionId || !itemId) return;
+
+    _dndState = { dragging: true, sectionId, itemId, overCard: null, overAfter: false };
+    try { card.classList.add("qCard--dragging"); } catch {}
+    try {
+      e.dataTransfer.effectAllowed = "move";
+      e.dataTransfer.setData("text/plain", JSON.stringify({ sectionId, itemId }));
+      try { e.dataTransfer.setDragImage(card, 24, 18); } catch {}
+    } catch {}
+  });
+
+  elQuestionsList?.addEventListener("dragover", (e) => {
+    if (!_dndState.dragging) return;
+    const card = e.target?.closest?.(".qCard[data-section][data-qid]");
+    if (!card) return;
+    const sectionId = String(card.dataset.section || "");
+    if (sectionId !== _dndState.sectionId) return;
+
+    try { e.preventDefault(); } catch {}
+    try { e.dataTransfer.dropEffect = "move"; } catch {}
+
+    const rect = card.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > (rect.height / 2);
+    if (_dndState.overCard !== card || _dndState.overAfter !== after) {
+      try {
+        if (_dndState.overCard) _dndState.overCard.classList.remove("qCard--drop-before", "qCard--drop-after");
+      } catch {}
+      _dndState.overCard = card;
+      _dndState.overAfter = after;
+      try { card.classList.add(after ? "qCard--drop-after" : "qCard--drop-before"); } catch {}
+    }
+  });
+
+  elQuestionsList?.addEventListener("drop", async (e) => {
+    if (!_dndState.dragging) return;
+    const card = e.target?.closest?.(".qCard[data-section][data-qid]");
+    if (!card) return clearDndVisuals();
+    const sectionId = String(card.dataset.section || "");
+    const targetId = String(card.dataset.qid || "");
+    if (sectionId !== _dndState.sectionId) return clearDndVisuals();
+    if (!targetId || targetId === _dndState.itemId) return clearDndVisuals();
+
+    try { e.preventDefault(); } catch {}
+    const rect = card.getBoundingClientRect();
+    const after = (e.clientY - rect.top) > (rect.height / 2);
+
+    const moved = moveItemTo(sectionId, _dndState.itemId, targetId, after);
+    clearDndVisuals();
+    if (!moved) return;
+    try { await saveTest(); } catch (e2) { return setOut(e2?.message || "Save failed.", false); }
+    setOut("Saved.", true);
+  });
+
+  elQuestionsList?.addEventListener("dragend", () => {
+    if (!_dndState.dragging) return;
+    clearDndVisuals();
   });
 }
 
