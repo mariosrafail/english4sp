@@ -67,12 +67,12 @@ body.embed.tests-bs .card{
 }
 .tests-bs .btn:hover{
   border-color: rgba(47,109,246,0.62);
-  color:#fff;
+  color: var(--btnTextHover, #fff);
   background-size: 100% 100%;
 }
 .tests-bs .btn:active{
   border-color: rgba(47,109,246,0.78);
-  color:#fff;
+  color: var(--btnTextActive, var(--btnTextHover, #fff));
   background-image: linear-gradient(var(--btnFillActive, var(--accentActive)), var(--btnFillActive, var(--accentActive)));
   background-size: 100% 100%;
 }
@@ -173,7 +173,40 @@ body.embed.tests-bs .card{
 }
 
 /* Section tabs */
-.tests-bs .admin-q-tabs{ gap: 10px; }
+.tests-bs .admin-q-tabs{
+  gap: 12px;
+  border-bottom: 1px solid rgba(17,24,39,0.10);
+  padding-bottom: 6px;
+}
+.tests-bs button.admin-q-tab{
+  border: none;
+  border-bottom: 3px solid transparent;
+  border-radius: 0;
+  padding: 10px 10px 8px;
+  background: transparent;
+  background-image: none;
+  background-size: auto;
+  --btnTextHover: var(--text);
+  --btnTextActive: var(--text);
+  color: var(--muted);
+}
+.tests-bs button.admin-q-tab:hover{
+  color: var(--text) !important;
+  background: rgba(17,24,39,0.03);
+}
+.tests-bs button.admin-q-tab:active{
+  color: var(--text) !important;
+  background: rgba(17,24,39,0.05);
+}
+.tests-bs button.admin-q-tab[aria-selected="true"]{
+  color: var(--text) !important;
+  border-bottom-color: rgba(47,109,246,0.85);
+  background: transparent;
+}
+.tests-bs button.admin-q-tab:focus-visible{
+  outline: none;
+  box-shadow: 0 0 0 4px var(--focus);
+}
 
 /* Editors */
 .tests-bs .editorCard{

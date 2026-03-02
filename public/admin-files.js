@@ -247,6 +247,7 @@ function renderListening() {
     const exists = !!r.exists;
     const url = String(r.url || "");
     const ep = escapeHtml(String(r.examPeriodId || ""));
+    const locked = !!r.locked;
     return `
       <div class="q" style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px;">
         <div style="min-width:0;">
@@ -254,12 +255,13 @@ function renderListening() {
           <div class="small muted" style="margin-top:6px;">
             ${exists ? `Size: <span class="mono">${escapeHtml(fmtBytes(r.size))}</span> · Updated: <span class="mono">${escapeHtml(fmtDate(r.mtimeMs))}</span>` : "No listening file uploaded."}
           </div>
+          ${locked ? `<div class="small bad" style="margin-top:6px;">Test is locked (exam started). Listening file changes are disabled.</div>` : ""}
           ${exists ? `<div class="small muted mono" style="margin-top:6px; word-break:break-all; overflow-wrap:anywhere;">${escapeHtml(String(r.relPath || ""))}</div>` : ""}
         </div>
         <div class="fileActions">
           ${exists ? `<a class="btnSmall btnGhost" href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Open</a>` : ""}
-          <button class="btnSmall btnPrimarySmall" data-action="upload_listening" data-ep="${ep}" type="button">${exists ? "Replace" : "Upload"}</button>
-          ${exists ? `<button class="btnSmall btnDanger" data-action="del_listening" data-ep="${ep}" type="button">Delete</button>` : ""}
+          <button class="btnSmall btnPrimarySmall" data-action="upload_listening" data-ep="${ep}" type="button" ${locked ? "disabled" : ""}>${exists ? "Replace" : "Upload"}</button>
+          ${exists ? `<button class="btnSmall btnDanger" data-action="del_listening" data-ep="${ep}" type="button" ${locked ? "disabled" : ""}>Delete</button>` : ""}
         </div>
       </div>
     `;
@@ -414,19 +416,63 @@ async function uploadListening(examPeriodId, file) {
   const f = file || null;
   if (!f) throw new Error("Pick an MP3 file first.");
 
-  const fd = new FormData();
-  fd.append("audio", f, f.name || "listening.mp3");
-
   const stop = busyStart("Uploading…");
   try {
-    const r = await fetch(`/api/admin/listening-audio?examPeriodId=${encodeURIComponent(String(ep))}`, {
-      method: "POST",
-      body: fd,
-      credentials: "same-origin",
-    });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(String(j?.message || j?.error || `Upload failed (${r.status})`));
-    return j;
+    async function uploadChunked(chunkBytes) {
+      const init = await fetch(`/api/admin/listening-audio/chunk/init?examPeriodId=${encodeURIComponent(String(ep))}`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: f.name || "listening.mp3", size: Number(f.size || 0), chunkBytes }),
+      });
+      const ij = await init.json().catch(() => ({}));
+      if (!init.ok) throw new Error(String(ij?.message || ij?.error || `Init failed (${init.status})`));
+      const uploadId = String(ij?.uploadId || "").trim();
+      const negotiated = Number(ij?.chunkBytes || chunkBytes);
+      if (!uploadId) throw new Error("Chunk init failed (missing uploadId).");
+
+      const totalBytes = Number(f.size || 0);
+      const chunkSize = Math.max(64 * 1024, Number.isFinite(negotiated) ? negotiated : chunkBytes);
+      const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
+
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * chunkSize;
+        const end = Math.min(totalBytes, start + chunkSize);
+        const blob = f.slice(start, end);
+        const r = await fetch(`/api/admin/listening-audio/chunk/part?uploadId=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(i))}`, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/octet-stream" },
+          body: blob,
+        });
+        if (r.status === 413) throw Object.assign(new Error("Chunk too large (413)"), { code: "chunk_413" });
+        const pj = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(String(pj?.message || pj?.error || `Chunk failed (${r.status})`));
+      }
+
+      const fin = await fetch(`/api/admin/listening-audio/chunk/complete`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uploadId, totalChunks, totalBytes }),
+      });
+      const fj = await fin.json().catch(() => ({}));
+      if (!fin.ok) throw new Error(String(fj?.message || fj?.error || `Complete failed (${fin.status})`));
+      return fj;
+    }
+
+    const sizes = [900 * 1024, 512 * 1024, 256 * 1024, 128 * 1024];
+    let lastErr = null;
+    for (const sz of sizes) {
+      try {
+        return await uploadChunked(sz);
+      } catch (e) {
+        lastErr = e;
+        if (String(e?.code || "") === "chunk_413") continue;
+        throw e;
+      }
+    }
+    throw lastErr || new Error("Upload failed.");
   } finally {
     stop();
   }
@@ -524,6 +570,8 @@ function wire() {
       if (act === "del_listening") {
         const ep = Number(btn.dataset.ep || 0);
         if (!ep) return;
+        const row = (Array.isArray(_data?.listening) ? _data.listening : []).find((x) => Number(x?.examPeriodId || 0) === ep) || null;
+        if (row && row.locked) return setOut("Locked: exam has started. Listening file changes are disabled.", false);
         const ok = await uiConfirm("Delete listening.mp3 for this exam period?", { title: "Delete Listening Audio", yesText: "Delete", noText: "Cancel", danger: true });
         if (!ok) return;
         await deleteListening(ep);
@@ -532,6 +580,8 @@ function wire() {
       } else if (act === "upload_listening") {
         const ep = Number(btn.dataset.ep || 0);
         if (!ep) return;
+        const row = (Array.isArray(_data?.listening) ? _data.listening : []).find((x) => Number(x?.examPeriodId || 0) === ep) || null;
+        if (row && row.locked) return setOut("Locked: exam has started. Listening file changes are disabled.", false);
         openUploadPickerForExamPeriod(ep);
       } else if (act === "snap_pick") {
         const key = String(btn.dataset.key || "").trim() || "all";

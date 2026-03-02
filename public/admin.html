@@ -14,7 +14,7 @@
       <div class="admin-layout">
         <aside class="admin-sidebar">
           <div class="admin-brand">
-            <div class="admin-logo" aria-hidden="true">D</div>
+
             <div class="admin-brand-text">
               <div class="admin-brand-title">Dashboard</div>
               <div class="admin-brand-sub">Admin Panel</div>
@@ -82,17 +82,19 @@
               id="admin-tab-danger"
               aria-controls="admin-panel-danger"
             >Danger Zone</button>
+
+            <button
+              id="btnAdminLogout"
+              class="admin-tab admin-tab--danger admin-tab--logout"
+              type="button"
+              role="button"
+              title="Log out"
+            >Log out</button>
           </nav>
 
         </aside>
 
         <div class="admin-main">
-          <header class="admin-topbar">
-            <div class="admin-topbar-right">
-              <button id="btnAdminLogout" class="admin-logout" type="button" title="Log out">Log out</button>
-            </div>
-          </header>
-
           <main class="admin-tabpanels">
             <section
               class="admin-tabpanel"
@@ -190,11 +192,11 @@
                   </div>
                 </div>
 
-                <div class="admin-embed-block">
+                <div class="admin-embed-block admin-embed-block--flush">
                   <h3 class="admin-subtitle-h">Manage Candidates</h3>
                   <iframe
                     id="adminCandidatesFrame"
-                    class="admin-embed-frame"
+                    class="admin-embed-frame admin-embed-frame--flush"
                     title="Candidates"
                     src="/candidates.html?embed=1"
                     loading="lazy"
@@ -318,6 +320,12 @@
     <div class="adminBusyCard">
       <div class="adminBusySpinner" aria-hidden="true"></div>
       <div id="adminBusyText" class="adminBusyText">Processing. Don't close this page. Please wait...</div>
+      <div class="adminBusyBarWrap" aria-hidden="true">
+        <div class="adminBusyBar">
+          <div id="adminBusyBarFill" class="adminBusyBarFill" style="width:0%"></div>
+        </div>
+        <div id="adminBusyPct" class="adminBusyPct">0%</div>
+      </div>
     </div>
   </div>
 

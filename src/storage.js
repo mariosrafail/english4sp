@@ -1,5 +1,39 @@
 const fs = require("fs");
 const path = require("path");
+const { createNextcloudWebdavClient } = require("./nextcloud_webdav");
+
+let _nextcloudClient = null;
+function getNextcloudClient() {
+  const shareUrl = String(process.env.NEXTCLOUD_SHARE_URL || "").trim();
+  const baseWebdavUrl = String(process.env.NEXTCLOUD_WEBDAV_URL || "").trim();
+  const username = String(process.env.NEXTCLOUD_WEBDAV_USER || "").trim();
+  const password = String(process.env.NEXTCLOUD_WEBDAV_PASS || process.env.NEXTCLOUD_SHARE_PASSWORD || "");
+  if (!shareUrl && !baseWebdavUrl) return null;
+  if (_nextcloudClient) return _nextcloudClient;
+  _nextcloudClient = createNextcloudWebdavClient({ shareUrl, baseWebdavUrl, username, password });
+  return _nextcloudClient;
+}
+
+function isNextcloudMirrorRequired() {
+  const raw = process.env.NEXTCLOUD_MIRROR_REQUIRED;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return true;
+  const v = String(raw).trim().toLowerCase();
+  if (["0", "false", "no", "n", "off"].includes(v)) return false;
+  return true;
+}
+
+function isPublicFileStorageEnabled() {
+  const raw = process.env.FILE_STORAGE_PUBLIC;
+  if (raw === undefined || raw === null || String(raw).trim() === "") return false;
+  const v = String(raw).trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(v)) return true;
+  return false;
+}
+
+function publicPrefix() {
+  const raw = String(process.env.FILE_STORAGE_PUBLIC_PREFIX || "").trim();
+  return (raw || "/storage").replace(/\/+$/, "");
+}
 
 function storageBaseDir() {
   const raw = String(process.env.FILE_STORAGE_DIR || "").trim();
@@ -40,6 +74,16 @@ async function writeFile(relPath, data) {
   const { rel, abs } = resolvePath(relPath);
   ensureDirForFile(abs);
   await fs.promises.writeFile(abs, data);
+
+  const nc = getNextcloudClient();
+  if (nc) {
+    try {
+      await nc.putFile(rel, Buffer.isBuffer(data) ? data : Buffer.from(data || ""), { contentType: contentTypeForPath(rel) });
+    } catch (e) {
+      if (isNextcloudMirrorRequired()) throw e;
+      console.warn("nextcloud_mirror_write_failed", { relPath: rel, message: String(e?.message || e) });
+    }
+  }
   return { relPath: rel, absPath: abs };
 }
 
@@ -47,6 +91,15 @@ async function deleteFile(relPath) {
   const { abs } = resolvePath(relPath);
   try {
     await fs.promises.unlink(abs);
+    const nc = getNextcloudClient();
+    if (nc) {
+      try {
+        await nc.deleteFile(String(relPath || ""));
+      } catch (e) {
+        if (isNextcloudMirrorRequired()) throw e;
+        console.warn("nextcloud_mirror_delete_failed", { relPath: String(relPath || ""), message: String(e?.message || e) });
+      }
+    }
     return true;
   } catch (e) {
     if (e && (e.code === "ENOENT" || e.code === "ENOTDIR")) return false;
@@ -74,6 +127,13 @@ function contentTypeForPath(relPath) {
   return "application/octet-stream";
 }
 
+function publicUrlForPath(relPath) {
+  if (!isPublicFileStorageEnabled()) return "";
+  const safe = safeRelPath(relPath);
+  const parts = safe.split("/").filter(Boolean).map((p) => encodeURIComponent(p));
+  return `${publicPrefix()}/${parts.join("/")}`;
+}
+
 module.exports = {
   storageBaseDir,
   ensureBaseDir,
@@ -83,5 +143,5 @@ module.exports = {
   deleteFile,
   statFile,
   contentTypeForPath,
+  publicUrlForPath,
 };
-

@@ -77,7 +77,7 @@
               <ul>
                 <li>Camera permission granted</li>
                 <li>Face detected for 2 seconds</li>
-                <li>Fullscreen enabled</li>
+                <li id="reqFullscreen">Fullscreen enabled</li>
               </ul>
             </div>
 
@@ -123,10 +123,9 @@
   <div id="camMini" class="camMini" style="display:none" aria-label="Camera preview">
     <div class="camMiniHeader">
       <div class="camMiniTitle">Camera</div>
-      <div class="camMiniStatus"><span id="camMiniDot" class="dot" aria-hidden="true"></span><span id="camMiniText">Startingâ€¦</span></div>
+      <div class="camMiniStatus"><span id="camMiniDot" class="dot" aria-hidden="true"></span><span id="camMiniText">Starting...</span></div>
     </div>
     <div class="camMiniBody">
-      <button id="fsBtnMini" class="miniBtn" type="button">Enter fullscreen mode</button>
       <video id="videoMini" playsinline autoplay muted></video>
     </div>
   </div>

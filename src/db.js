@@ -519,9 +519,33 @@ async function createSession({ candidateName, examPeriodId = 1 }) {
   return { token, sessionId };
 }
 
-async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even" }) {
+async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even", onProgress } = {}) {
   const ep = Number(examPeriodId) || 1;
   if (!Number.isFinite(ep) || ep <= 0) throw new Error("Invalid exam period");
+
+  const inRows = Array.isArray(rows) ? rows : [];
+  const workRows = inRows.filter((r) => String(r?.email || "").trim());
+
+  // Dedupe by email (keep last occurrence so the spreadsheet "wins").
+  const byEmail = new Map();
+  for (const r of workRows) {
+    const email = String(r?.email || "").trim().toLowerCase();
+    if (!email) continue;
+    byEmail.set(email, {
+      email,
+      name: String(r?.name || "").trim(),
+      country: String(r?.country || "").trim(),
+    });
+  }
+  const uniqRows = Array.from(byEmail.values());
+
+  const total = uniqRows.length;
+  let processed = 0;
+  const report = (phase = "importing") => {
+    if (typeof onProgress !== "function") return;
+    try { onProgress({ processed, total, phase }); } catch {}
+  };
+  report("candidates");
 
   // Ensure exam period exists.
   await run(
@@ -533,41 +557,103 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmen
   try {
     const created = [];
 
-    for (const r of rows || []) {
-      const name = String(r?.name || "").trim();
-      const email = String(r?.email || "").trim().toLowerCase();
-      const country = String(r?.country || "").trim();
-      if (!email) continue;
+    if (!uniqRows.length) {
+      await run("COMMIT;");
+      report("done");
+      return { sessions: created };
+    }
 
-      // Upsert candidate by email.
+    // Batch upsert candidates (much faster than per-row run + select).
+    const CHUNK = 200; // keep under SQLite variable limit (999)
+    for (let i = 0; i < uniqRows.length; i += CHUNK) {
+      const chunk = uniqRows.slice(i, i + CHUNK);
+      const now = Date.now();
+      const valuesSql = chunk.map(() => "(?, ?, ?, ?)").join(",");
+      const params = [];
+      for (const r of chunk) params.push(r.name || null, r.email, r.country || null, now);
       await run(
         `INSERT INTO candidates (name, email, country, created_at_utc_ms)
-         VALUES (?, ?, ?, ?)
+         VALUES ${valuesSql}
          ON CONFLICT(email) DO UPDATE
          SET name = excluded.name,
              country = excluded.country;`,
-        [name || null, email, country || null, Date.now()]
+        params
       );
+      processed = Math.min(total, i + chunk.length);
+      report("candidates");
+    }
 
-      const c = await get(`SELECT id, name, email, country FROM candidates WHERE email = ? LIMIT 1;`, [email]);
-      if (!c) continue;
-
-      const existing = await get(
-        `SELECT id AS sessionId, token AS token FROM sessions WHERE exam_period_id = ? AND candidate_id = ? LIMIT 1;`,
-        [ep, Number(c.id)]
+    // Fetch candidate ids for all emails.
+    const candByEmail = new Map();
+    processed = 0;
+    report("lookup");
+    for (let i = 0; i < uniqRows.length; i += CHUNK) {
+      const chunk = uniqRows.slice(i, i + CHUNK);
+      const inSql = chunk.map(() => "?").join(",");
+      const rows = await all(
+        `SELECT id, name, email, country FROM candidates WHERE email IN (${inSql});`,
+        chunk.map((r) => r.email)
       );
-      if (existing && String(assignmentStrategy || "") !== "single_least_random") {
+      for (const c of rows || []) {
+        const email = String(c.email || "").trim().toLowerCase();
+        if (email) candByEmail.set(email, c);
+      }
+      processed = Math.min(total, i + chunk.length);
+      report("lookup");
+    }
+
+    // Fetch existing sessions for these candidates (for this exam period).
+    const canReuse = String(assignmentStrategy || "") !== "single_least_random";
+    const existingByCandidateId = new Map();
+    if (canReuse) {
+      const candIds = Array.from(
+        new Set(Array.from(candByEmail.values()).map((c) => Number(c.id)).filter((n) => Number.isFinite(n) && n > 0))
+      );
+      const ID_CHUNK = 300; // ep param + ids stays under limit
+      processed = 0;
+      report("sessions_lookup");
+      for (let i = 0; i < candIds.length; i += ID_CHUNK) {
+        const ids = candIds.slice(i, i + ID_CHUNK);
+        const inSql = ids.map(() => "?").join(",");
+        const rows = await all(
+          `SELECT candidate_id AS candidateId, id AS sessionId, token AS token
+           FROM sessions
+           WHERE exam_period_id = ?
+             AND candidate_id IN (${inSql});`,
+          [ep, ...ids]
+        );
+        for (const s of rows || []) {
+          const cid = Number(s.candidateId || 0);
+          if (Number.isFinite(cid) && cid > 0 && !existingByCandidateId.has(cid)) existingByCandidateId.set(cid, s);
+        }
+        processed = Math.min(total, i + ids.length);
+        report("sessions_lookup");
+      }
+    }
+
+    processed = 0;
+    report("sessions");
+    for (const r of uniqRows) {
+      const email = String(r.email || "").trim().toLowerCase();
+      const c = candByEmail.get(email) || null;
+      const cid = Number(c?.id || 0);
+      if (!Number.isFinite(cid) || cid <= 0) continue;
+
+      const existing = canReuse ? existingByCandidateId.get(cid) : null;
+      if (existing) {
         created.push({
           sessionId: Number(existing.sessionId),
           token: String(existing.token || ""),
           examPeriodId: ep,
-          candidateId: Number(c.id),
-          name: String(c.name || ""),
-          email: String(c.email || ""),
-          country: String(c.country || ""),
+          candidateId: cid,
+          name: String(c?.name || r.name || ""),
+          email: String(c?.email || r.email || ""),
+          country: String(c?.country || r.country || ""),
           reused: true,
           assignedExaminer: "",
         });
+        processed += 1;
+        report("sessions");
         continue;
       }
 
@@ -579,7 +665,7 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmen
           const ins = await run(
             `INSERT INTO sessions (exam_period_id, candidate_id, token, name, submitted)
              VALUES (?, ?, ?, ?, 0);`,
-            [ep, Number(c.id), token, String(c.name || "Candidate")]
+            [ep, cid, token, String(c?.name || r.name || "Candidate")]
           );
           sessionId = Number(ins?.lastID || 0) || null;
           break;
@@ -598,16 +684,21 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmen
         sessionId,
         token,
         examPeriodId: ep,
-        candidateId: Number(c.id),
-        name: String(c.name || ""),
-        email: String(c.email || ""),
-        country: String(c.country || ""),
+        candidateId: cid,
+        name: String(c?.name || r.name || ""),
+        email: String(c?.email || r.email || ""),
+        country: String(c?.country || r.country || ""),
         reused: false,
         assignedExaminer: "",
       });
+
+      processed += 1;
+      report("sessions");
     }
 
     await run("COMMIT;");
+    processed = total;
+    report("done");
     return { sessions: created };
   } catch (e) {
     try { await run("ROLLBACK;"); } catch {}
@@ -618,7 +709,7 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmen
 async function getGateForToken(token) {
   const t = String(token || "").trim();
   if (!t) return null;
-  const s = await get(`SELECT id FROM sessions WHERE token = ? ORDER BY id DESC LIMIT 1;`, [t]);
+  const s = await get(`SELECT id, exam_period_id AS examPeriodId FROM sessions WHERE token = ? ORDER BY id DESC LIMIT 1;`, [t]);
   if (!s) return null;
 
   const now = Date.now();
@@ -629,7 +720,8 @@ async function getGateForToken(token) {
   const durMs = durMinOk * 60 * 1000;
   const endAtUtc = openOk + durMs;
 
-  return { now, openAtUtc: openOk, durationMinutes: durMinOk, durMs, endAtUtc };
+  const examPeriodId = Number(s?.examPeriodId || 0) || 1;
+  return { now, openAtUtc: openOk, durationMinutes: durMinOk, durMs, endAtUtc, examPeriodId };
 }
 
 async function getSessionForExam(token) {
@@ -1188,13 +1280,23 @@ async function setExaminerGrades({ sessionId, speakingGrade, writingGrade }) {
   let ansObj = {};
   try { ansObj = JSON.parse(String(q?.answers_json || "{}")); } catch {}
 
-  // Compute objective score from all auto-gradable items.
+  // Compute objective score from Listening + Reading + Writing Task 1 (auto-gradable items only).
   const payload = await getAdminTest(Number(s.exam_period_id) || 1);
   let objectiveEarned = 0;
   let objectiveMax = 0;
+  const sectionIdNorm = (sec) => String(sec?.id || "").trim().toLowerCase();
   for (const sec of payload.sections || []) {
+    const sidNorm = sectionIdNorm(sec);
+    const inObjectiveSection = sidNorm === "listening" || sidNorm === "reading" || sidNorm === "writing";
+    if (!inObjectiveSection) continue;
+
+    let writingTask1Active = true;
     for (const item of sec.items || []) {
       if (!item || !item.id || item.type === "info") continue;
+      if (sidNorm === "writing") {
+        if (item.type === "writing") writingTask1Active = false;
+        if (!writingTask1Active) continue;
+      }
       const pts = Number(item.points || 0);
       if (pts <= 0) continue;
 
@@ -1483,12 +1585,14 @@ async function deleteAllCoreData() {
     // Order matters due to foreign keys.
     await run("DELETE FROM question_grades;");
     await run("DELETE FROM proctoring_acks;");
+    await run("DELETE FROM session_snapshots;");
+    await run("DELETE FROM session_listening_access;");
     await run("DELETE FROM sessions;");
     await run("DELETE FROM candidates;");
     // Reset autoincrement counters (best-effort).
     try {
       await run(
-        "DELETE FROM sqlite_sequence WHERE name IN ('question_grades','proctoring_acks','sessions','candidates');"
+        "DELETE FROM sqlite_sequence WHERE name IN ('question_grades','proctoring_acks','session_snapshots','sessions','candidates');"
       );
     } catch {}
     await run("COMMIT;");
@@ -1537,6 +1641,45 @@ async function deleteCandidateBySessionId(sessionId) {
   }
 }
 
+// Delete only a single session (row in admin candidates table), and cleanup dependent rows.
+async function deleteSessionById(sessionId) {
+  const sid = Number(sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) throw new Error("Invalid session id");
+
+  await run("BEGIN;");
+  try {
+    const sr = await get(`SELECT id, candidate_id FROM sessions WHERE id = ? LIMIT 1;`, [sid]);
+    if (!sr) {
+      await run("ROLLBACK;");
+      return { ok: false, deleted: 0 };
+    }
+
+    const candidateId = sr.candidate_id ? Number(sr.candidate_id) : null;
+
+    await run(`DELETE FROM question_grades WHERE session_id = ?;`, [sid]);
+    await run(`DELETE FROM proctoring_acks WHERE session_id = ?;`, [sid]);
+    await run(`DELETE FROM session_snapshots WHERE session_id = ?;`, [sid]);
+    await run(`DELETE FROM session_listening_access WHERE session_id = ?;`, [sid]);
+    const sdel = await run(`DELETE FROM sessions WHERE id = ?;`, [sid]);
+
+    let candidateDeleted = false;
+    if (Number.isFinite(candidateId) && candidateId > 0) {
+      const c = await get(`SELECT COUNT(1) AS n FROM sessions WHERE candidate_id = ?;`, [candidateId]);
+      const n = Number(c?.n || 0);
+      if (n <= 0) {
+        await run(`DELETE FROM candidates WHERE id = ?;`, [candidateId]);
+        candidateDeleted = true;
+      }
+    }
+
+    await run("COMMIT;");
+    return { ok: true, deleted: Number(sdel?.changes || 0), candidateDeleted };
+  } catch (e) {
+    try { await run("ROLLBACK;"); } catch {}
+    throw e;
+  }
+}
+
 module.exports = {
   initDb,
   db,
@@ -1568,6 +1711,7 @@ module.exports = {
   listExamPeriods,
   getQuestionGrades,
   deleteCandidateBySessionId,
+  deleteSessionById,
   deleteAllCoreData,
   issueListeningTicket,
   verifyListeningTicket,

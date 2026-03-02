@@ -413,9 +413,9 @@ async function load() {
 async function autoRefresh() {
   try {
     const [fresh, periods, speaking] = await Promise.all([
-      apiGet("/api/examiner/candidates"),
-      apiGet("/api/examiner/exam-periods").catch(() => []),
-      apiGet("/api/examiner/speaking-slots?limit=50000").catch(() => []),
+      apiGet("/api/examiner/candidates", { busy: false }),
+      apiGet("/api/examiner/exam-periods", { busy: false }).catch(() => []),
+      apiGet("/api/examiner/speaking-slots?limit=50000", { busy: false }).catch(() => []),
     ]);
     if (!Array.isArray(fresh)) return;
     rebuildSpeakingIndex(speaking);

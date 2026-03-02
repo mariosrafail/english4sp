@@ -1,4 +1,4 @@
-import { apiGet, qs, escapeHtml } from "/app.js";
+import { apiGet, qs, escapeHtml, busyStart } from "/app.js";
 
 const elExamPeriod = qs("#examPeriod");
 const elExaminer = qs("#examinerFilter");
@@ -15,27 +15,20 @@ const elPrev = qs("#prev");
 const elNext = qs("#next");
 const elPageNum = qs("#pageNum");
 const elPageMax = qs("#pageMax");
-const elBusyOverlay = qs("#speakingBusyOverlay");
-const elBusyText = qs("#speakingBusyText");
 
 let _rows = [];
 let _view = [];
 let _page = 1;
-let _busyCount = 0;
+const _busyStops = [];
 
 function showBusy(message) {
-  _busyCount += 1;
-  if (elBusyText) {
-    elBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
-  }
-  if (elBusyOverlay) elBusyOverlay.style.display = "flex";
+  const stop = busyStart(String(message || "Processing. Don't close this page. Please wait..."));
+  _busyStops.push(stop);
 }
 
 function hideBusy() {
-  _busyCount = Math.max(0, _busyCount - 1);
-  if (_busyCount === 0 && elBusyOverlay) {
-    elBusyOverlay.style.display = "none";
-  }
+  const stop = _busyStops.length ? _busyStops.pop() : null;
+  try { if (typeof stop === "function") stop(); } catch {}
 }
 
 function toDatetimeLocalValue(ms) {

@@ -35,6 +35,8 @@ const elImportPeriodTitle = elImportPeriodOverlay ? elImportPeriodOverlay.queryS
 const elImportPeriodSubtitle = elImportPeriodOverlay ? elImportPeriodOverlay.querySelector("p.muted") : null;
 const elAdminBusyOverlay = qs("#adminBusyOverlay");
 const elAdminBusyText = qs("#adminBusyText");
+const elAdminBusyBarFill = qs("#adminBusyBarFill");
+const elAdminBusyPct = qs("#adminBusyPct");
 const elReloadSpeakingSlots = qs("#btnReloadSpeakingSlots");
 const elSpeakingSlotsOut = qs("#speakingSlotsOut");
 const elSpeakingSlotsBody = qs("#speakingSlotsBody");
@@ -270,6 +272,7 @@ function showAdminBusy(message) {
   if (elAdminBusyText) {
     elAdminBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
   }
+  setAdminBusyProgress(null, null);
   if (elAdminBusyOverlay) elAdminBusyOverlay.style.display = "flex";
 }
 
@@ -278,6 +281,61 @@ function hideAdminBusy() {
   if (_busyCount === 0 && elAdminBusyOverlay) {
     elAdminBusyOverlay.style.display = "none";
   }
+}
+
+function setAdminBusyText(message) {
+  if (elAdminBusyText) {
+    elAdminBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
+  }
+}
+
+function fmtEtaSeconds(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  const mm = String(Math.floor(s / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return `${mm}:${ss}`;
+}
+
+function setAdminBusyProgress(pct, etaSeconds) {
+  if (!elAdminBusyBarFill && !elAdminBusyPct) return;
+  if (pct === null || pct === undefined) {
+    try { if (elAdminBusyBarFill) elAdminBusyBarFill.style.width = "0%"; } catch {}
+    try { if (elAdminBusyPct) elAdminBusyPct.textContent = ""; } catch {}
+    return;
+  }
+  const v = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  try { if (elAdminBusyBarFill) elAdminBusyBarFill.style.width = `${v}%`; } catch {}
+  if (elAdminBusyPct) {
+    const eta = Number.isFinite(Number(etaSeconds)) && Number(etaSeconds) > 0 ? ` · ETA ${fmtEtaSeconds(etaSeconds)}` : "";
+    elAdminBusyPct.textContent = `${v}%${eta}`;
+  }
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+async function apiGetNoBusy(url) {
+  const r = await fetch(String(url || ""), { method: "GET", credentials: "same-origin" });
+  const j = await r.json().catch(() => ({}));
+  if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
+    location.href = "/index.html";
+    throw new Error("Not authenticated");
+  }
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+let _adminUiCfg = null;
+async function getAdminUiCfg() {
+  if (_adminUiCfg) return _adminUiCfg;
+  try {
+    const cfg = await apiGetNoBusy("/api/config");
+    _adminUiCfg = (cfg && typeof cfg === "object" && cfg.adminUi && typeof cfg.adminUi === "object") ? cfg.adminUi : {};
+  } catch {
+    _adminUiCfg = {};
+  }
+  return _adminUiCfg;
 }
 
 function askImportExamPeriodId(defaultId, mode = "candidates") {
@@ -375,6 +433,7 @@ elCreate.addEventListener("click", async () => {
 
 elDelete.addEventListener("click", async () => {
   let didBusy = false;
+  let shouldReload = false;
   try {
     elDelete.disabled = true;
     elCfgOut.innerHTML = "";
@@ -396,13 +455,19 @@ elDelete.addEventListener("click", async () => {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
 
-    await loadExamPeriods(1);
     elCfgOut.innerHTML = `<span class="ok">Deleted.</span>`;
+    // Hard refresh so embedded tools/iframes re-fetch dropdowns and state.
+    shouldReload = true;
   } catch (e) {
     elCfgOut.innerHTML = `<span class="bad">Error: ${escapeHtml(e.message || String(e))}</span>`;
   } finally {
     try { if (didBusy) hideAdminBusy(); } catch {}
     elDelete.disabled = false;
+    if (shouldReload) {
+      setTimeout(() => {
+        try { location.reload(); } catch {}
+      }, 50);
+    }
   }
 });
 
@@ -498,8 +563,8 @@ elImport.addEventListener("click", async () => {
     fd.append("file", f);
     fd.append("examPeriodId", String(ep));
 
-    showAdminBusy("Processing. Don't close this page. Please wait...");
-    const r = await fetch("/api/admin/import-excel", {
+    showAdminBusy("Processing... Importing. Loaded 0/0");
+    const r = await fetch("/api/admin/import-excel/job/start", {
       method: "POST",
       body: fd,
       credentials: "same-origin",
@@ -510,11 +575,127 @@ elImport.addEventListener("click", async () => {
       throw new Error(j.error || `HTTP ${r.status}`);
     }
 
-    const speakingCreated = Number(r.headers.get("X-Speaking-Slots-Created") || 0);
-    const speakingFailed = Number(r.headers.get("X-Speaking-Slots-Failed") || 0);
-    const speakingErr = String(r.headers.get("X-Speaking-Slots-Error") || "").trim();
+    const start = await r.json().catch(() => ({}));
+    let job = start?.job || null;
+    const jobId = String(job?.jobId || "").trim();
+    if (!jobId) throw new Error("Import job did not start.");
 
-    const blob = await r.blob();
+    // Show initial progress immediately (before first poll), so it doesn't jump to 114/114.
+    const initialTotal = Math.max(0, Number(job?.total || 0));
+    if (initialTotal > 0) setAdminBusyText(`Processing... Importing. Loaded 0/${initialTotal}`);
+    setAdminBusyProgress(0, null);
+
+    const phaseLabel = (p) => {
+      const ph = String(p || "").trim().toLowerCase();
+      if (ph === "candidates") return "Upserting candidates";
+      if (ph === "lookup") return "Reading candidates";
+      if (ph === "sessions_lookup") return "Checking existing sessions";
+      if (ph === "sessions") return "Creating sessions";
+      if (ph === "assigning") return "Assigning examiners";
+      if (ph === "speaking") return "Speaking slots";
+      if (ph === "exporting") return "Preparing export";
+      if (ph === "done") return "Finalizing";
+      if (ph === "queued") return "Starting";
+      return "Importing";
+    };
+
+    const phaseWeights = {
+      queued: 0.00,
+      candidates: 0.20,
+      lookup: 0.06,
+      sessions_lookup: 0.06,
+      sessions: 0.20,
+      assigning: 0.05,
+      speaking: 0.38,
+      exporting: 0.05,
+      done: 0.00,
+      error: 0.00,
+    };
+    const phaseOrder = ["queued", "candidates", "lookup", "sessions_lookup", "sessions", "assigning", "speaking", "exporting", "done"];
+
+    const computePercent = (phaseRaw, processed, total) => {
+      const ph = String(phaseRaw || "").trim().toLowerCase();
+      if (ph === "done") return 100;
+      if (ph === "error") return 100;
+
+      const idx = phaseOrder.indexOf(ph);
+      const curW = Number(phaseWeights[ph] || 0);
+      const curP = (Number(total) > 0) ? Math.max(0, Math.min(1, Number(processed) / Number(total))) : 0;
+
+      let base = 0;
+      if (idx > 0) {
+        for (let i = 0; i < idx; i++) base += Number(phaseWeights[phaseOrder[i]] || 0);
+      }
+      const pct = (base + (curW * curP)) * 100;
+      return Math.max(0, Math.min(99.9, pct));
+    };
+
+    let lastText = "";
+    let lastPct = null;
+    let lastPctAt = 0;
+    let lastEta = null;
+    for (let i = 0; i < 1800; i++) {
+      if (!job || !job.done) {
+        const st = await apiGetNoBusy(`/api/admin/import-excel/job/${encodeURIComponent(jobId)}`);
+        job = st?.job || job;
+      }
+
+      const processed = Number(job?.processed || 0);
+      const total = Number(job?.total || 0);
+      const phaseRaw = String(job?.phase || "").trim().toLowerCase();
+      const ph = phaseLabel(phaseRaw);
+      const verb = phaseRaw === "speaking"
+        ? "Speaking"
+        : (phaseRaw === "sessions" ? "Created" : "Progress");
+
+      let text = "";
+      text = total > 0
+        ? `Processing... ${ph}. ${verb} ${Math.min(processed, total)}/${total}`
+        : `Processing... ${ph}`;
+
+      if (text !== lastText) {
+        setAdminBusyText(text);
+        lastText = text;
+      }
+
+      const pct = computePercent(phaseRaw, processed, total);
+      let eta = null;
+      const now = Date.now();
+      if (lastPct !== null && lastPctAt > 0 && now > lastPctAt) {
+        const dt = (now - lastPctAt) / 1000;
+        const dp = pct - lastPct;
+        const rate = dt > 0 ? (dp / dt) : 0;
+        if (rate > 0.05) {
+          const remain = Math.max(0, 100 - pct);
+          eta = Math.min(12 * 3600, Math.round(remain / rate));
+        }
+      }
+      lastPct = pct;
+      lastPctAt = now;
+      if (eta === null && lastEta != null) eta = lastEta;
+      lastEta = eta;
+      setAdminBusyProgress(pct, eta);
+
+      if (job && job.done) break;
+      const wait = phaseRaw === "speaking" ? 250 : 160;
+      await delay(wait);
+    }
+
+    if (!job) throw new Error("Import status unavailable.");
+    if (String(job.error || "").trim()) throw new Error(String(job.error));
+    if (String(job.phase || "") === "error") throw new Error("Import failed.");
+
+    setAdminBusyText("Downloading export...");
+    const dl = await fetch(`/api/admin/import-excel/job/${encodeURIComponent(jobId)}/download`, {
+      method: "GET",
+      credentials: "same-origin",
+    });
+    if (!dl.ok) {
+      const j = await dl.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${dl.status}`);
+    }
+
+    const blob = await dl.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
@@ -523,6 +704,10 @@ elImport.addEventListener("click", async () => {
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+
+    const speakingCreated = Number(job?.speakingCreated || 0);
+    const speakingFailed = Number(job?.speakingFailed || 0);
+    const speakingErr = String(job?.speakingError || "").trim();
 
     const speakingNote = (speakingCreated > 0 || speakingFailed > 0 || speakingErr)
       ? ` Speaking slots: created ${Math.max(0, speakingCreated)}, failed ${Math.max(0, speakingFailed)}.${speakingErr ? ` Error: ${escapeHtml(speakingErr)}` : ""}`

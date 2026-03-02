@@ -129,6 +129,7 @@ async function ensureLivekitRoomAndCapacity(room) {
   const participants = await svc.listParticipants(room);
   const count = Array.isArray(participants) ? participants.length : 0;
   if (count >= 2) throw new Error("room_full");
+  return { count };
 }
 
 async function createLivekitJoinToken(room, displayName) {
@@ -390,4 +391,3 @@ module.exports = {
   ensureLivekitRoomAndCapacity,
   createLivekitJoinToken,
 };
-

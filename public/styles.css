@@ -10,6 +10,8 @@
   --btnBase: rgba(47,109,246,0.08);
   --btnBorder: rgba(47,109,246,0.42);
   --btnText: #123a7a;
+  --btnTextHover: #ffffff;
+  --btnTextActive: #ffffff;
   --ok:#16a34a;
   --bad:#dc2626;
   --danger:#ef4444;
@@ -45,8 +47,11 @@ a{color:var(--accent); text-decoration:none}
 /* Admin tests: section tabs in the right panel */
 .admin-q-tabs{
   display:flex;
-  gap:10px;
+  gap:12px;
   flex-wrap:wrap;
+  align-items:flex-end;
+  border-bottom: 1px solid rgba(17,24,39,0.10);
+  padding-bottom: 6px;
 }
 .admin-tests-top-tabs{
   margin: 0 0 14px 0;
@@ -59,18 +64,36 @@ a{color:var(--accent); text-decoration:none}
 }
 .admin-q-tab{
   width:auto;
-  padding:10px 12px;
-  border-radius:4px;
-  border:1px solid rgba(17,24,39,0.18);
-  background: #fff;
+  padding:10px 10px 8px;
+  border-radius:0;
+  border: none;
+  border-bottom: 3px solid transparent;
+  background: transparent;
+  background-image: none;
+  background-size: auto;
+  --btnTextHover: var(--text);
+  --btnTextActive: var(--text);
   color: var(--muted);
   font-weight:900;
   cursor:pointer;
+  transition: background-color .15s ease, color .15s ease, border-color .15s ease;
 }
 .admin-q-tab[aria-selected="true"]{
-  border-color: rgba(47,109,246,0.55);
   color: var(--text);
-  background: var(--soft);
+  border-bottom-color: rgba(47,109,246,0.85);
+  background: transparent;
+}
+.admin-q-tab:hover,
+.admin-q-tab:active{
+  color: var(--text) !important;
+  background-image: none;
+  background-size: auto;
+}
+.admin-q-tab:hover{ background: rgba(17,24,39,0.03); }
+.admin-q-tab:active{ background: rgba(17,24,39,0.05); }
+.admin-q-tab:focus-visible{
+  outline:none;
+  box-shadow: 0 0 0 4px var(--focus);
 }
 .admin-q-panel[hidden]{ display:none; }
 
@@ -279,17 +302,23 @@ button{
 
 button:hover{
   border-color: rgba(47,109,246,0.62);
-  color:#fff;
+  color: var(--btnTextHover, #fff);
   background-size: 100% 100%;
 }
 button:active{
   border-color: rgba(47,109,246,0.78);
-  color:#fff;
+  color: var(--btnTextActive, var(--btnTextHover, #fff));
   background-image: linear-gradient(var(--btnFillActive, var(--accentActive)), var(--btnFillActive, var(--accentActive)));
   background-size: 100% 100%;
 }
 button:disabled{ opacity:.55; cursor:not-allowed; }
 
+/* Hard guard: section-tab buttons must never flip to white text on hover/active. */
+button.admin-q-tab:hover,
+button.admin-q-tab:active{
+  color: var(--text) !important;
+}
+ 
 button.primary{
   background-color: transparent;
   border-color: rgba(47,109,246,0.70);
@@ -428,6 +457,10 @@ button.btnDanger:active{
   border-radius:14px;
   border:1px solid rgba(17,24,39,0.14);
   background:#fff;
+  background-image:none;
+  background-size:auto;
+  --btnTextHover: var(--text);
+  --btnTextActive: var(--text);
   color: var(--text);
   font-weight:900;
   font-size:12px;
@@ -437,7 +470,14 @@ button.btnDanger:active{
   gap:6px;
   text-align:left;
 }
-.candRow:hover{ background: var(--soft); border-color: rgba(17,24,39,0.20); }
+.candRow:hover{
+  background: var(--soft);
+  border-color: rgba(17,24,39,0.20);
+  color: var(--text);
+}
+.candRow:active{
+  color: var(--text);
+}
 .candRow[aria-selected="true"]{
   border-color: rgba(47,109,246,0.55);
   background: rgba(47,109,246,0.10);
@@ -654,6 +694,13 @@ button.btnDanger:active{
   font-weight:700;
   cursor:grab;
   box-shadow:none;
+  touch-action: manipulation;
+}
+.word-chip.selected{
+  border-color: rgba(47,109,246,0.62);
+  background: rgba(47,109,246,0.12);
+  box-shadow: 0 0 0 5px var(--focus);
+  cursor:pointer;
 }
 .word-chip:hover{
   background:#eceff3;
@@ -680,6 +727,11 @@ button.btnDanger:active{
   color:#6b7280;
   font-weight:700;
   user-select:none;
+  touch-action: manipulation;
+}
+.gap-blank:focus-visible{
+  outline:none;
+  box-shadow: 0 0 0 5px var(--focus);
 }
 .gap-blank.drag-over{
   border-color:rgba(17,24,39,0.55);
@@ -765,6 +817,13 @@ audio::-webkit-media-controls-volume-slider{border-radius:999px}
 .searchWrap{align-items:stretch !important}
 .filtersUnder{margin-top:0 !important}
 
+/* Candidates table scroll stability */
+.candidatesTableWrap{
+  overflow:auto;
+  scrollbar-gutter: stable both-edges;
+  -webkit-overflow-scrolling:touch;
+}
+
 /* Pagination buttons tighter */
 .pager{margin-top:10px !important}
 
@@ -772,7 +831,19 @@ audio::-webkit-media-controls-volume-slider{border-radius:999px}
   .wrap{padding:14px}
   .topbar-inner{padding:10px 14px}
   .row{gap:12px}
+  .row2{flex-wrap:wrap}
+  .row2 > *{flex:1 1 220px}
   button{padding:12px}
+  /* Tabs: allow horizontal scroll on very small screens */
+  .admin-q-tabs{flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch}
+  /* Proctoring acknowledge checkbox: make it finger-friendly */
+  .ackLabel{font-size:14px; gap:12px; line-height:1.4}
+  .ackLabel input[type="checkbox"]{ transform: scale(1.45); margin-top:3px; }
+  /* Drag-words: keep gaps readable on narrow screens */
+  body.test-page .gap-blank{ min-width:84px; min-height:40px; padding:6px 10px; }
+  body.test-page .word-chip{ min-width:72px; padding:12px 14px; }
+  /* Tables: avoid breaking layout */
+  table.table{ display:block; overflow-x:auto; width:100%; -webkit-overflow-scrolling:touch; }
 }
 
 /* Exam lock overlay (tab switch / camera missing) */
@@ -821,6 +892,9 @@ audio::-webkit-media-controls-volume-slider{border-radius:999px}
   padding:10px 10px;
   background:linear-gradient(180deg, rgba(47,109,246,0.10), rgba(255,255,255,0));
   border-bottom:1px solid rgba(17,24,39,0.10);
+  cursor:move;
+  user-select:none;
+  touch-action:none;
 }
 .camMiniTitle{font-weight:900; font-size:12px; color:var(--text)}
 .camMiniStatus{display:flex; align-items:center; gap:8px; font-size:12px; color:var(--muted)}
@@ -843,8 +917,10 @@ audio::-webkit-media-controls-volume-slider{border-radius:999px}
 .dot.ok{background:rgba(34,197,94,0.85); box-shadow:0 0 0 6px rgba(34,197,94,0.12)}
 
 @media (max-width:600px){
-  .camMini{right:10px; bottom:10px; width:190px}
-  .camMini video{height:120px}
+  .camMini{right:10px; bottom:10px; width:160px}
+  .camMiniBody{padding:8px}
+  .camMiniHeader{padding:8px 10px}
+  .camMini video{height:96px}
 }
 
 
@@ -1056,27 +1132,60 @@ audio::-webkit-media-controls-volume-slider{border-radius:999px}
   padding:16px;
 }
 .adminBusyCard{
-  width:min(420px, 100%);
-  background:#fff;
-  border:var(--border);
-  border-radius:14px;
-  box-shadow:var(--shadow2);
-  padding:18px 16px;
+  width:min(720px, 100%);
+  background:transparent;
+  border:none;
+  border-radius:0;
+  box-shadow:none;
+  padding:0;
   text-align:center;
 }
 .adminBusySpinner{
-  width:34px;
-  height:34px;
-  margin:0 auto 10px auto;
+  width:46px;
+  height:46px;
+  margin:0 auto 14px auto;
   border-radius:999px;
-  border:3px solid rgba(17,24,39,0.18);
-  border-top-color:#111;
+  border:4px solid rgba(255,255,255,0.26);
+  border-top-color:#fff;
   animation:adminSpin 0.9s linear infinite;
 }
 .adminBusyText{
-  color:var(--text);
-  font-size:14px;
-  font-weight:700;
+  color:#fff;
+  font-size:16px;
+  font-weight:900;
+  text-shadow:0 2px 14px rgba(0,0,0,0.35);
+}
+.adminBusyBarWrap{
+  margin:14px auto 0 auto;
+  width:min(520px, 100%);
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+.adminBusyBar{
+  flex:1 1 auto;
+  height:12px;
+  border-radius:999px;
+  background:rgba(255,255,255,0.18);
+  border:1px solid rgba(255,255,255,0.22);
+  overflow:hidden;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.18);
+}
+.adminBusyBarFill{
+  height:100%;
+  width:0%;
+  border-radius:999px;
+  background: var(--accent);
+  transition: width 140ms ease;
+}
+.adminBusyPct{
+  flex:0 0 auto;
+  min-width:92px;
+  text-align:right;
+  color:#fff;
+  font-weight:900;
+  font-size:13px;
+  text-shadow:0 2px 14px rgba(0,0,0,0.35);
 }
 @keyframes adminSpin{
   from{transform:rotate(0deg)}

@@ -939,9 +939,40 @@ async function createSession({ candidateName }) {
   return { token, sessionId: r.rows[0].id };
 }
 
-async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even" }) {
+async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even", onProgress } = {}) {
   const ep = Number(examPeriodId) || 1;
   if (!Number.isFinite(ep) || ep <= 0) throw new Error("Invalid exam period");
+
+  const importPerRow = (() => {
+    const raw = process.env.IMPORT_PROGRESS_PER_ROW;
+    if (raw === undefined || raw === null || String(raw).trim() === "") return false;
+    const v = String(raw).trim().toLowerCase();
+    return ["1", "true", "yes", "y", "on"].includes(v);
+  })();
+
+  const inRows = Array.isArray(rows) ? rows : [];
+  const workRows = inRows.filter((r) => String(r?.email || "").trim());
+
+  // Dedupe by email (keep last occurrence so the spreadsheet "wins").
+  const byEmail = new Map();
+  for (const r of workRows) {
+    const email = String(r?.email || "").trim().toLowerCase();
+    if (!email) continue;
+    byEmail.set(email, {
+      email,
+      name: String(r?.name || "").trim(),
+      country: String(r?.country || "").trim(),
+    });
+  }
+  const uniqRows = Array.from(byEmail.values());
+
+  const total = uniqRows.length;
+  let processed = 0;
+  const report = (phase = "importing") => {
+    if (typeof onProgress !== "function") return;
+    try { onProgress({ processed, total, phase }); } catch {}
+  };
+  report("candidates");
 
   // Ensure exam period exists (with defaults if new)
   await q(
@@ -957,82 +988,292 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmen
 
     const created = [];
 
-    for (const r of rows || []) {
-      const name = String(r.name || "").trim();
-      const email = String(r.email || "").trim().toLowerCase();
-      const country = String(r.country || "").trim();
-      if (!email) continue;
+    if (!uniqRows.length) {
+      await client.query("COMMIT");
+      report("done");
+      return { sessions: created };
+    }
+
+    // Optional: strict per-row progress (slower but truly 1-by-1).
+    if (importPerRow) {
+      const canReuse = String(assignmentStrategy || "") !== "single_least_random";
+      const candByEmail = new Map();
+
+      processed = 0;
+      report("candidates");
+      for (const r of uniqRows) {
+        const name = String(r?.name || "").trim();
+        const email = String(r?.email || "").trim().toLowerCase();
+        const country = String(r?.country || "").trim();
+        if (!email) continue;
+
+        const cand = await client.query(
+          `INSERT INTO public.candidates (name, email, country)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (email) DO UPDATE
+           SET name = EXCLUDED.name,
+               country = EXCLUDED.country
+           RETURNING id, name, email, country;`,
+          [name || null, email, country || null]
+        );
+        const c = cand.rows?.[0] || null;
+        if (c && c.email) candByEmail.set(String(c.email).trim().toLowerCase(), c);
+
+        processed += 1;
+        report("candidates");
+      }
+
+      processed = 0;
+      report("sessions");
+      for (const r of uniqRows) {
+        const email = String(r?.email || "").trim().toLowerCase();
+        const c = candByEmail.get(email) || null;
+        const cid = Number(c?.id || 0);
+        if (!Number.isFinite(cid) || cid <= 0) continue;
+
+        let existing = null;
+        if (canReuse) {
+          existing = await client.query(
+            `SELECT id, token
+             FROM public.sessions
+             WHERE exam_period_id = $1 AND candidate_id = $2
+             LIMIT 1;`,
+            [ep, cid]
+          );
+        }
+        const exRow = existing?.rows?.[0] || null;
+        if (exRow && canReuse) {
+          created.push({
+            sessionId: exRow.id,
+            token: exRow.token,
+            examPeriodId: ep,
+            candidateId: cid,
+            name: c?.name || r.name || "",
+            email: c?.email || r.email || "",
+            country: c?.country || r.country || "",
+            reused: true,
+          });
+        } else {
+          let token = makeToken(10);
+          let inserted = null;
+          for (let i = 0; i < 5; i++) {
+            try {
+              const s = await client.query(
+                `INSERT INTO public.sessions (exam_period_id, candidate_id, token, name, submitted)
+                 VALUES ($1, $2, $3, $4, FALSE)
+                 RETURNING id;`,
+                [ep, cid, token, c?.name || r.name || "Candidate"]
+              );
+              inserted = s.rows?.[0] || null;
+              break;
+            } catch (e) {
+              if (e && e.code === "23505") {
+                token = makeToken(10);
+                continue;
+              }
+              throw e;
+            }
+          }
+          if (inserted && inserted.id) {
+            created.push({
+              sessionId: inserted.id,
+              token,
+              examPeriodId: ep,
+              candidateId: cid,
+              name: c?.name || r.name || "",
+              email: c?.email || r.email || "",
+              country: c?.country || r.country || "",
+              reused: false,
+            });
+          }
+        }
+
+        processed += 1;
+        report("sessions");
+      }
+
+      const sidsForAssign = created.map((x) => Number(x.sessionId));
+      processed = total;
+      report("assigning");
+      if (String(assignmentStrategy || "") === "single_least_random") {
+        for (const sid of sidsForAssign) {
+          await assignSingleToLeastLoadedRandomTie({ sessionId: sid, examPeriodId: ep, client });
+        }
+      } else {
+        await assignSessionsBalancedAcrossExaminers({
+          sessionIds: sidsForAssign,
+          examPeriodId: ep,
+          client,
+        });
+      }
+
+      const sidList = created
+        .map((x) => Number(x.sessionId))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (sidList.length) {
+        const asg = await client.query(
+          `SELECT a.session_id, e.username
+           FROM public.examiner_assignments a
+           JOIN public.examiners e ON e.id = a.examiner_id
+           WHERE a.session_id = ANY($1::int[]);`,
+          [sidList]
+        );
+        const bySid = new Map((asg.rows || []).map((r) => [Number(r.session_id), String(r.username || "")]));
+        for (const c of created) c.assignedExaminer = bySid.get(Number(c.sessionId)) || "";
+      }
+
+      await client.query("COMMIT");
+      report("done");
+      return { sessions: created };
+    }
+
+    // Chunked upsert candidates so progress reflects real work (and avoids huge params).
+    const CHUNK = Math.max(50, Math.min(800, Math.floor(Number(process.env.IMPORT_DB_CHUNK_SIZE || 400))));
+    const candByEmail = new Map();
+    const candById = new Map();
+    processed = 0;
+    report("candidates");
+    for (let i = 0; i < uniqRows.length; i += CHUNK) {
+      const chunk = uniqRows.slice(i, i + CHUNK);
+      const emails = chunk.map((r) => r.email);
+      const names = chunk.map((r) => (r.name || null));
+      const countries = chunk.map((r) => (r.country || null));
 
       const cand = await client.query(
-        `INSERT INTO candidates (name, email, country)
-         VALUES ($1, $2, $3)
+        `WITH in_rows AS (
+           SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[]) AS t(name, email, country)
+         )
+         INSERT INTO public.candidates (name, email, country)
+         SELECT name, email, country FROM in_rows
          ON CONFLICT (email) DO UPDATE
          SET name = EXCLUDED.name,
              country = EXCLUDED.country
          RETURNING id, name, email, country;`,
-        [name || null, email, country || null]
+        [names, emails, countries]
       );
-      const c = cand.rows[0];
 
-      // If the same email is already registered for the same exam period,
-      // do NOT create another session/link.
-      // Qualify selected columns to avoid ambiguity (both tables have an "id")
+      for (const c of cand.rows || []) {
+        const e = String(c.email || "").trim().toLowerCase();
+        if (e) candByEmail.set(e, c);
+        const id = Number(c.id);
+        if (Number.isFinite(id) && id > 0) candById.set(id, c);
+      }
+      processed = Math.min(total, i + chunk.length);
+      report("candidates");
+    }
+
+    const candIds = Array.from(new Set(Array.from(candByEmail.values()).map((c) => Number(c.id)).filter((n) => Number.isFinite(n) && n > 0)));
+
+    // Fetch existing sessions for these candidates in one query.
+    const canReuse = String(assignmentStrategy || "") !== "single_least_random";
+    const existingByCandidateId = new Map();
+    if (canReuse && candIds.length) {
+      processed = 0;
+      report("sessions_lookup");
       const existing = await client.query(
-        `SELECT s.id AS id, s.token AS token
-         FROM sessions s
-         LEFT JOIN question_grades q ON q.session_id = s.id
-         WHERE s.exam_period_id = $1 AND s.candidate_id = $2
-         LIMIT 1;`,
-        [ep, c.id]
+        `SELECT id, candidate_id, token
+         FROM public.sessions
+         WHERE exam_period_id = $1 AND candidate_id = ANY($2::bigint[]);`,
+        [ep, candIds]
       );
-      if (existing.rows.length && String(assignmentStrategy || "") !== "single_least_random") {
+      for (const s of existing.rows || []) {
+        const cid = Number(s.candidate_id || 0);
+        if (Number.isFinite(cid) && cid > 0 && !existingByCandidateId.has(cid)) existingByCandidateId.set(cid, s);
+      }
+      processed = total;
+      report("sessions_lookup");
+    }
+
+    // Build list of sessions to insert in bulk.
+    const toCreate = [];
+    processed = 0;
+    report("sessions");
+    for (const r of uniqRows) {
+      const c = candByEmail.get(String(r.email || "").trim().toLowerCase()) || null;
+      const cid = Number(c?.id || 0);
+      if (!Number.isFinite(cid) || cid <= 0) continue;
+      const existing = canReuse ? existingByCandidateId.get(cid) : null;
+      if (existing) {
         created.push({
-          sessionId: existing.rows[0].id,
-          token: existing.rows[0].token,
+          sessionId: existing.id,
+          token: existing.token,
           examPeriodId: ep,
-          candidateId: c.id,
-          name: c.name || "",
-          email: c.email,
-          country: c.country || "",
+          candidateId: cid,
+          name: c?.name || r.name || "",
+          email: c?.email || r.email || "",
+          country: c?.country || r.country || "",
           reused: true,
         });
-        continue;
+        processed += 1;
+        report("sessions");
+      } else {
+        toCreate.push({ candidateId: cid, name: String(c?.name || r.name || "Candidate") });
       }
+    }
 
-      // Otherwise create a new session
-      let token = makeToken(10);
-      // retry on collision
-      for (let i = 0; i < 5; i++) {
-        try {
-          const s = await client.query(
-            `INSERT INTO sessions (exam_period_id, candidate_id, token, name, submitted)
-             VALUES ($1, $2, $3, $4, FALSE)
-             RETURNING id;`,
-            [ep, c.id, token, c.name || "Candidate"]
-          );
-          created.push({
-            sessionId: s.rows[0].id,
-            token,
-            examPeriodId: ep,
-            candidateId: c.id,
-            name: c.name || "",
-            email: c.email,
-            country: c.country || "",
-            reused: false,
-          });
-          break;
-        } catch (e) {
-          // unique violation on token
-          if (e && e.code === "23505") {
-            token = makeToken(10);
-            continue;
+    // Bulk insert sessions with retry on (rare) token collisions.
+    let remaining = toCreate.slice();
+    // Note: processed currently includes reused; total is uniqRows length.
+    for (let attempt = 0; attempt < 5 && remaining.length; attempt++) {
+      const REM_CHUNK = Math.max(50, Math.min(CHUNK, 800));
+      const nextRemaining = [];
+      for (let off = 0; off < remaining.length; off += REM_CHUNK) {
+        const sub = remaining.slice(off, off + REM_CHUNK);
+        const candIdArr = sub.map((x) => Number(x.candidateId));
+        const nameArr = sub.map((x) => String(x.name || "Candidate"));
+        const tokenArr = sub.map(() => makeToken(10));
+
+        const ins = await client.query(
+          `INSERT INTO public.sessions (exam_period_id, candidate_id, token, name, submitted)
+           SELECT $1, x.candidate_id, x.token, x.name, FALSE
+           FROM UNNEST($2::bigint[], $3::text[], $4::text[]) AS x(candidate_id, token, name)
+           ON CONFLICT (token) DO NOTHING
+           RETURNING id, candidate_id, token;`,
+          [ep, candIdArr, tokenArr, nameArr]
+        );
+
+        const insertedByCandidate = new Map();
+        for (const row of ins.rows || []) insertedByCandidate.set(Number(row.candidate_id), row);
+
+        for (let i = 0; i < sub.length; i++) {
+          const cid = Number(sub[i].candidateId);
+          const row = insertedByCandidate.get(cid);
+          if (row) {
+            created.push({
+              sessionId: row.id,
+              token: row.token,
+              examPeriodId: ep,
+              candidateId: cid,
+              name: sub[i].name || "",
+              email: "",
+              country: "",
+              reused: false,
+            });
+            processed += 1;
+            report("sessions");
+          } else {
+            nextRemaining.push(sub[i]);
           }
-          throw e;
+        }
+      }
+      remaining = nextRemaining;
+    }
+
+    // Fill email/country for newly created rows (from candidate map).
+    for (const s of created) {
+      if (s && s.reused === false && (!s.email || !s.country)) {
+        const c = candById.get(Number(s.candidateId)) || null;
+        if (c) {
+          s.email = c.email;
+          s.country = c.country || "";
+          s.name = s.name || c.name || "";
         }
       }
     }
 
     const sidsForAssign = created.map((x) => Number(x.sessionId));
+    processed = total;
+    report("assigning");
     if (String(assignmentStrategy || "") === "single_least_random") {
       for (const sid of sidsForAssign) {
         await assignSingleToLeastLoadedRandomTie({ sessionId: sid, examPeriodId: ep, client });
@@ -1061,6 +1302,7 @@ async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmen
     }
 
     await client.query("COMMIT");
+    report("done");
     return { sessions: created };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
@@ -1144,12 +1386,14 @@ async function getGateForToken(token) {
   const durationMinutes = Number.isFinite(durMin) && durMin > 0 ? durMin : DEFAULT_DURATION_MINUTES;
   const durMs = durationMinutes * 60 * 1000;
   const endAt = openAtUtc + durMs;
+  const examPeriodId = Number(row.exam_period_id || 0) || 1;
   return {
     now,
     openAtUtc,
     durationMinutes,
     durMs,
     endAtUtc: endAt,
+    examPeriodId,
   };
 }
 
@@ -1656,6 +1900,54 @@ async function deleteCandidateBySessionId(sessionId) {
     const sdel = await client.query(`DELETE FROM public.sessions WHERE id = $1`, [sid]);
     await client.query("COMMIT");
     return { ok: true, deleted: Number(sdel.rowCount || 0) };
+  } catch (e) {
+    try { await client.query("ROLLBACK"); } catch {}
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+// Delete only a single session (row in admin candidates table), and cleanup dependent rows + speaking slot.
+async function deleteSessionById(sessionId) {
+  const sid = Number(sessionId);
+  if (!Number.isFinite(sid) || sid <= 0) throw new Error("Invalid session id");
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const sr = await client.query(
+      `SELECT id, candidate_id
+       FROM public.sessions
+       WHERE id = $1
+       FOR UPDATE`,
+      [sid]
+    );
+    if (!sr.rows.length) {
+      await client.query("ROLLBACK");
+      return { ok: false, deleted: 0 };
+    }
+
+    const candidateId = sr.rows[0].candidate_id ? Number(sr.rows[0].candidate_id) : null;
+
+    await client.query(`DELETE FROM public.question_grades WHERE session_id = $1`, [sid]);
+    await client.query(`DELETE FROM public.speaking_slots WHERE session_id = $1`, [sid]);
+    // Dependent rows (proctoring_acks, snapshots, listening tickets, assignments) are FK-cascaded from sessions.
+    const sdel = await client.query(`DELETE FROM public.sessions WHERE id = $1`, [sid]);
+
+    let candidateDeleted = false;
+    if (Number.isFinite(candidateId) && candidateId > 0) {
+      const c = await client.query(`SELECT COUNT(1) AS n FROM public.sessions WHERE candidate_id = $1`, [candidateId]);
+      const n = Number(c.rows?.[0]?.n || 0);
+      if (n <= 0) {
+        await client.query(`DELETE FROM public.candidates WHERE id = $1`, [candidateId]);
+        candidateDeleted = true;
+      }
+    }
+
+    await client.query("COMMIT");
+    return { ok: true, deleted: Number(sdel.rowCount || 0), candidateDeleted };
   } catch (e) {
     try { await client.query("ROLLBACK"); } catch {}
     throw e;
@@ -2480,15 +2772,25 @@ async function setExaminerGrades({ sessionId, speakingGrade, writingGrade }) {
     [sid]
   );
 
-  // Compute objective score from all auto-gradable items.
+  // Compute objective score from Listening + Reading + Writing Task 1 (auto-gradable items only).
   const payload = await getAdminTest(Number(s.exam_period_id) || 1);
   function norm(s){ return String(s || "").trim().toLowerCase(); }
   const ansObj = (qg && typeof qg.answers_json === "object" && qg.answers_json) || {};
   let objectiveEarned = 0;
   let objectiveMax = 0;
+  const sectionIdNorm = (sec) => String(sec?.id || "").trim().toLowerCase();
   for (const sec of payload.sections || []) {
+    const sidNorm = sectionIdNorm(sec);
+    const inObjectiveSection = sidNorm === "listening" || sidNorm === "reading" || sidNorm === "writing";
+    if (!inObjectiveSection) continue;
+
+    let writingTask1Active = true;
     for (const item of sec.items || []) {
       if (!item || !item.id || item.type === "info") continue;
+      if (sidNorm === "writing") {
+        if (item.type === "writing") writingTask1Active = false;
+        if (!writingTask1Active) continue;
+      }
       const pts = Number(item.points || 0);
       if (pts <= 0) continue;
 
@@ -2534,7 +2836,7 @@ async function deleteAllCoreData() {
   await q("BEGIN;");
   try {
     await q(
-      "TRUNCATE public.examiner_assignments, public.question_grades, public.sessions, public.candidates RESTART IDENTITY CASCADE;"
+      "TRUNCATE public.speaking_slots, public.session_snapshots, public.session_listening_access, public.proctoring_acks, public.examiner_assignments, public.question_grades, public.sessions, public.candidates RESTART IDENTITY CASCADE;"
     );
     await q("COMMIT;");
     return { ok: true };
@@ -2589,5 +2891,6 @@ module.exports = {
   ensureSessionAssignedExaminer,
   getQuestionGrades,
   deleteCandidateBySessionId,
+  deleteSessionById,
   deleteAllCoreData,
 };

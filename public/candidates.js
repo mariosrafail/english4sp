@@ -1,4 +1,4 @@
-import { apiGet, qs, uiAlert, uiConfirm } from "./app.js";
+import { apiGet, qs, uiAlert, uiConfirm, busyStart } from "./app.js";
 
 const elQ = qs("#q");
 const elClear = qs("#clear");
@@ -7,6 +7,7 @@ const elOnlyDone = qs("#onlyDone");
 const elOnlyDisq = qs("#onlyDisq");
 const elExamPeriod = qs("#examPeriod");
 const elExaminerFilter = qs("#examinerFilter");
+const elPageSize = qs("#pageSize");
 const elBtnSelectVisible = qs("#btnSelectVisible");
 const elBtnClearSelection = qs("#btnClearSelection");
 const elBtnExportSelected = qs("#btnExportSelected");
@@ -14,6 +15,7 @@ const elBtnDeleteSelected = qs("#btnDeleteSelected");
 const elChkAll = qs("#chkAll");
 
 const elTbody = qs("#tbody");
+const elTableWrap = qs("#tableWrap");
 const elPageNum = qs("#pageNum");
 const elPageMax = qs("#pageMax");
 const elPrev = qs("#prev");
@@ -30,13 +32,25 @@ const elExportDetailsOverlay = qs("#exportDetailsOverlay");
 const elExportDetailsYes = qs("#btnExportDetailsYes");
 const elExportDetailsNo = qs("#btnExportDetailsNo");
 const elExportDetailsCancel = qs("#btnExportDetailsCancel");
-const elCandidatesBusyOverlay = qs("#candidatesBusyOverlay");
-const elCandidatesBusyText = qs("#candidatesBusyText");
+
+const IS_EMBEDDED = (() => {
+  try {
+    const sp = new URLSearchParams(location.search || "");
+    if (sp.get("embed") === "1") return true;
+  } catch {}
+  try {
+    return window.self !== window.top;
+  } catch {
+    return true;
+  }
+})();
 
 let allRows = [];
 let filtered = [];
 let page = 1;
-const PAGE_SIZE = 20;
+const PAGE_SIZES = [20, 50, 100];
+const PAGE_SIZE_LS_KEY = "admin_candidates_pageSize_v1";
+let pageSize = 20;
 
 let allPeriods = [];
 const selectedIds = new Set();
@@ -44,14 +58,7 @@ const selectedIds = new Set();
 let applyTimer = null;
 let isApplying = false;
 let pendingApply = false;
-let _busyCount = 0;
-let _busyTimer = null;
-let _busyHideTimer = null;
-let _busyVisible = false;
-let _busyShownAtMs = 0;
-
-const BUSY_SHOW_DELAY_MS = 220;
-const BUSY_MIN_VISIBLE_MS = 450;
+const _busyStops = [];
 
 function normalize(x) {
   return String(x || "").trim().toLowerCase();
@@ -86,89 +93,83 @@ function cleanPromptText(s) {
   return v.replace(/^\s*\d+\s*[.)]\s*/, "");
 }
 
+let _scrollLocked = false;
+let _savedBodyOverflow = "";
+let _savedWrapScrollTop = 0;
+function lockScroll() {
+  if (_scrollLocked) return;
+  _scrollLocked = true;
+  try { _savedWrapScrollTop = elTableWrap ? Number(elTableWrap.scrollTop || 0) : 0; } catch {}
+  try { _savedBodyOverflow = String(document.body.style.overflow || ""); } catch {}
+  try { document.body.style.overflow = "hidden"; } catch {}
+}
+function unlockScroll() {
+  if (!_scrollLocked) return;
+  _scrollLocked = false;
+  try { document.body.style.overflow = _savedBodyOverflow; } catch {}
+  try { if (elTableWrap) elTableWrap.scrollTop = _savedWrapScrollTop; } catch {}
+}
+
 function closeReviewModal() {
   if (!elReviewOverlay) return;
+  if (IS_EMBEDDED) {
+    try { window.parent?.postMessage({ type: "embed:review", action: "close" }, location.origin); } catch {}
+    return;
+  }
   elReviewOverlay.style.display = "none";
+  unlockScroll();
 }
 
 function openReviewModal() {
   if (!elReviewOverlay) return;
+  if (IS_EMBEDDED) return;
+  lockScroll();
   elReviewOverlay.style.display = "flex";
 }
 
+function clampPageSize(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 20;
+  if (PAGE_SIZES.includes(v)) return v;
+  return 20;
+}
+
+function loadPageSize() {
+  try {
+    const raw = localStorage.getItem(PAGE_SIZE_LS_KEY);
+    pageSize = clampPageSize(raw || 20);
+  } catch {
+    pageSize = 20;
+  }
+  if (elPageSize) elPageSize.value = String(pageSize);
+}
+
+function savePageSize() {
+  try { localStorage.setItem(PAGE_SIZE_LS_KEY, String(pageSize)); } catch {}
+}
+
+function applyTableWrapSizing() {
+  if (!elTableWrap) return;
+  const headerApprox = 46;
+  const rowApprox = 46;
+  const desired = headerApprox + (rowApprox * pageSize) + 6;
+  const vh = Number(window.innerHeight || 0) || 900;
+  const cap = Math.max(260, Math.min(920, vh - 260));
+  const h = Math.min(desired, cap);
+  elTableWrap.style.maxHeight = `${h}px`;
+  elTableWrap.style.minHeight = `${h}px`;
+  elTableWrap.style.overflow = "auto";
+  try { elTableWrap.style.scrollbarGutter = "stable both-edges"; } catch {}
+}
+
 function showCandidatesBusy(message) {
-  _busyCount += 1;
-  if (elCandidatesBusyText) {
-    elCandidatesBusyText.textContent = String(message || "Processing. Don't close this page. Please wait...");
-  }
-
-  if (_busyHideTimer) {
-    clearTimeout(_busyHideTimer);
-    _busyHideTimer = null;
-  }
-
-  if (_busyVisible) {
-    return;
-  }
-
-  if (_busyTimer) {
-    clearTimeout(_busyTimer);
-    _busyTimer = null;
-  }
-
-  // Avoid flicker for fast operations (match app.js behavior).
-  if (_busyCount === 1) {
-    _busyTimer = setTimeout(() => {
-      _busyTimer = null;
-      if (_busyCount > 0 && elCandidatesBusyOverlay) {
-        elCandidatesBusyOverlay.style.display = "flex";
-        _busyVisible = true;
-        _busyShownAtMs = Date.now();
-      }
-    }, BUSY_SHOW_DELAY_MS);
-  }
+  const stop = busyStart(String(message || "Processing. Don't close this page. Please wait..."));
+  _busyStops.push(stop);
 }
 
 function hideCandidatesBusy() {
-  _busyCount = Math.max(0, _busyCount - 1);
-  if (_busyCount !== 0) return;
-
-  if (_busyTimer) {
-    clearTimeout(_busyTimer);
-    _busyTimer = null;
-  }
-
-  if (!elCandidatesBusyOverlay) return;
-
-  if (!_busyVisible) {
-    elCandidatesBusyOverlay.style.display = "none";
-    return;
-  }
-
-  const elapsed = Date.now() - Number(_busyShownAtMs || 0);
-  if (elapsed < BUSY_MIN_VISIBLE_MS) {
-    const wait = Math.max(0, BUSY_MIN_VISIBLE_MS - elapsed);
-    if (_busyHideTimer) clearTimeout(_busyHideTimer);
-    _busyHideTimer = setTimeout(() => {
-      _busyHideTimer = null;
-      if (_busyCount === 0 && elCandidatesBusyOverlay) elCandidatesBusyOverlay.style.display = "none";
-      _busyVisible = false;
-      _busyShownAtMs = 0;
-    }, wait);
-    return;
-  }
-
-  _busyVisible = false;
-  _busyShownAtMs = 0;
-  if (_busyHideTimer) {
-    clearTimeout(_busyHideTimer);
-    _busyHideTimer = null;
-  }
-  if (_busyTimer) {
-    clearTimeout(_busyTimer);
-    _busyTimer = null;
-  }
-  elCandidatesBusyOverlay.style.display = "none";
+  const stop = _busyStops.length ? _busyStops.pop() : null;
+  try { if (typeof stop === "function") stop(); } catch {}
 }
 
 function askIncludeDetailedGrades() {
@@ -251,10 +252,10 @@ function applySort(rows) {
 }
 
 function getCurrentSlice() {
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const p = Math.min(page, totalPages);
-  const start = (p - 1) * PAGE_SIZE;
-  return filtered.slice(start, start + PAGE_SIZE);
+  const start = (p - 1) * pageSize;
+  return filtered.slice(start, start + pageSize);
 }
 
 function updateSelectionKpi() {
@@ -342,7 +343,8 @@ function applyFilters(resetPage = true) {
 }
 
 function render() {
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  applyTableWrapSizing();
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   page = Math.min(page, totalPages);
 
   const slice = getCurrentSlice();
@@ -432,6 +434,8 @@ async function exportRows(rows, scopeLabel, includeDetailed = false) {
 
 async function load() {
   elTbody.innerHTML = `<tr><td colspan="8" class="muted">Loading...</td></tr>`;
+  loadPageSize();
+  applyTableWrapSizing();
   const [rows, periods] = await Promise.all([
     apiGet("/api/admin/candidates"),
     apiGet("/api/admin/exam-periods").catch(() => []),
@@ -444,7 +448,7 @@ async function load() {
 
 async function autoRefresh() {
   try {
-    const fresh = await apiGet("/api/admin/candidates");
+    const fresh = await apiGet("/api/admin/candidates", { busy: false });
     if (!Array.isArray(allRows) || fresh.length !== allRows.length || (fresh[0]?.sessionId !== allRows[0]?.sessionId)) {
       allRows = fresh;
       const keep = new Set((allRows || []).map((r) => Number(r.sessionId)));
@@ -463,6 +467,8 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) autoRefresh();
 });
 
+window.addEventListener("resize", () => applyTableWrapSizing());
+
 elQ.addEventListener("input", scheduleApply);
 elQ.addEventListener("search", () => scheduleApply());
 elSort.addEventListener("change", scheduleApply);
@@ -479,6 +485,13 @@ elClear.addEventListener("click", () => {
 
 elPrev.addEventListener("click", () => { page = Math.max(1, page - 1); render(); });
 elNext.addEventListener("click", () => { page = page + 1; render(); });
+
+elPageSize?.addEventListener("change", () => {
+  pageSize = clampPageSize(elPageSize.value || 20);
+  savePageSize();
+  page = 1;
+  render();
+});
 
 elBtnSelectVisible?.addEventListener("click", () => {
   for (const r of filtered) selectedIds.add(Number(r.sessionId));
@@ -562,6 +575,12 @@ elReviewClose?.addEventListener("click", closeReviewModal);
 elReviewOverlay?.addEventListener("click", (ev) => {
   if (ev.target === elReviewOverlay) closeReviewModal();
 });
+window.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (!elReviewOverlay) return;
+  if (elReviewOverlay.style.display !== "flex") return;
+  closeReviewModal();
+});
 
 elTbody.addEventListener("change", (ev) => {
   const chk = ev.target?.closest?.("input[data-role='pick']");
@@ -626,7 +645,7 @@ elTbody.addEventListener("click", async (ev) => {
       }).join("");
 
       if (elReviewBody) {
-        elReviewBody.innerHTML = `
+        const bodyHtml = `
           <div style="overflow:auto">
             <table class="table">
               <thead>
@@ -651,8 +670,22 @@ elTbody.addEventListener("click", async (ev) => {
             Speaking grade: <span class="mono">${escapeHtml(speakingGradeText)}</span>
           </div>
         `;
+        elReviewBody.innerHTML = bodyHtml;
       }
-      openReviewModal();
+
+      if (IS_EMBEDDED) {
+        try {
+          window.parent?.postMessage({
+            type: "embed:review",
+            action: "open",
+            title: elReviewTitle ? elReviewTitle.textContent : "Candidate Review",
+            metaHtml: elReviewMeta ? elReviewMeta.innerHTML : "",
+            bodyHtml: elReviewBody ? elReviewBody.innerHTML : "",
+          }, location.origin);
+        } catch {}
+      } else {
+        openReviewModal();
+      }
     } catch (e) {
       const msgRaw = String(e?.message || e || "");
       const msg = msgRaw.includes("Failed to fetch")

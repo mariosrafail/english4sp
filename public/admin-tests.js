@@ -45,6 +45,7 @@ const elQuestionsListening = qs("#questionsListening");
 const elQuestionsReading = qs("#questionsReading");
 const elQuestionsWriting = qs("#questionsWriting");
 const elOut = qs("#out");
+const elTestLockBanner = qs("#testLockBanner");
 
 let _payload = null; // full payload (includes correctIndex)
 let _payloadInitial = null; // for reset actions
@@ -52,6 +53,8 @@ let _qTab = "listening";
 let _editingMcq = { sectionId: "listening", itemId: null };
 let _editingReadingTextId = null;
 let _mcqLockMode = ""; // "", "tf"
+let _builderLocked = false;
+let _builderLockMeta = null;
 
 function setOut(msg, ok = true) {
   if (!elOut) return;
@@ -60,6 +63,90 @@ function setOut(msg, ok = true) {
 
 function cloneJson(x) {
   return JSON.parse(JSON.stringify(x || {}));
+}
+
+function fmtLocal(ms) {
+  const n = Number(ms);
+  if (!Number.isFinite(n) || n <= 0) return "";
+  try { return new Date(n).toLocaleString(); } catch { return ""; }
+}
+
+function setBuilderLocked(locked, meta) {
+  _builderLocked = !!locked;
+  _builderLockMeta = meta && typeof meta === "object" ? meta : null;
+  applyBuilderLocked();
+}
+
+function applyBuilderLocked() {
+  const locked = !!_builderLocked;
+  try { if (elTestLockBanner) elTestLockBanner.style.display = locked ? "" : "none"; } catch {}
+
+  if (locked && elTestLockBanner) {
+    const openAt = _builderLockMeta?.openAtUtc;
+    const when = fmtLocal(openAt);
+    const parts = [];
+    parts.push(`<div class="fw-bold">Test is locked</div>`);
+    parts.push(`<div class="small">The exam has already started, so changes are disabled.</div>`);
+    if (when) parts.push(`<div class="small text-muted mt-1">Started: <span class="mono">${escapeHtml(when)}</span></div>`);
+    elTestLockBanner.innerHTML = parts.join("");
+  }
+
+  const buttons = [
+    elSavePreview,
+    elSaveItem,
+    elNewQuestion,
+    elClearItem,
+    elAddOption,
+    elRemoveOption,
+    elSaveReadingText,
+    elClearReadingText,
+    elUploadListeningAudio,
+    elSaveDrag,
+    elResetDrag,
+    elSaveWriting,
+    elResetWriting,
+  ];
+  for (const b of buttons) {
+    try { if (b) b.disabled = locked; } catch {}
+  }
+
+  const inputs = [
+    elQText,
+    elReadingText,
+    elListeningAudioFile,
+    elDragInstructions,
+    elDragText,
+    elDragExtras,
+    elDragTitle,
+    elWritingPrompt,
+  ];
+  for (const el of inputs) {
+    try {
+      if (!el) continue;
+      if (el instanceof HTMLInputElement) el.disabled = locked;
+      if (el instanceof HTMLTextAreaElement) el.readOnly = locked;
+    } catch {}
+  }
+
+  try {
+    const optInputs = Array.from(elOptionsBox?.querySelectorAll("input.optionText, input.optionCorrect") || []);
+    for (const el of optInputs) {
+      if (el instanceof HTMLInputElement) el.disabled = locked;
+    }
+  } catch {}
+
+  try {
+    const lockableListButtons = Array.from(elQuestionsList?.querySelectorAll("button[data-action]") || []);
+    for (const b of lockableListButtons) {
+      if (b instanceof HTMLButtonElement) b.disabled = locked;
+    }
+  } catch {}
+
+  if (locked) {
+    const openAt = _builderLockMeta?.openAtUtc;
+    const when = fmtLocal(openAt);
+    setOut(when ? `Locked (test started: ${when}).` : "Locked (test started).", false);
+  }
 }
 
 function normalizeText(s, maxLen) {
@@ -790,16 +877,22 @@ function switchEditor() {
 async function loadExamPeriods() {
   const periods = await apiGet("/api/admin/exam-periods");
   const rows = Array.isArray(periods) ? periods : [];
-  elExamPeriod.innerHTML = `<option value="">Select exam period</option>` + rows
+  if (!rows.length) {
+    elExamPeriod.innerHTML = `<option value="">No exam periods</option>`;
+    elExamPeriod.value = "";
+    return;
+  }
+  elExamPeriod.innerHTML = rows
     .map((p) => `<option value="${escapeHtml(String(p.id))}">${escapeHtml(String(p.name || `Exam period ${p.id}`))}</option>`)
     .join("");
-  elExamPeriod.value = rows.length ? String(rows[0].id) : "";
+  elExamPeriod.value = String(rows[0].id);
 }
 
 async function loadTest() {
   const ep = getSelectedExamPeriodId();
   const qs = ep ? `?examPeriodId=${encodeURIComponent(String(ep))}` : "";
   const r = await apiGet(`/api/admin/tests${qs}`);
+  setBuilderLocked(!!r?.locked, { openAtUtc: r?.openAtUtc, serverNow: r?.serverNow, durationMinutes: r?.durationMinutes });
   _payload = r?.test || r?.payload || r || null;
   if (!_payload || typeof _payload !== "object") _payload = { version: 1, randomize: false, sections: [] };
   ensureSection(_payload, "listening", "Part 1: Listening");
@@ -811,7 +904,8 @@ async function loadTest() {
   renderListeningAudioStatus();
   renderQuestionsList();
   applyEditorsForTab(_qTab || "listening");
-  setOut("Loaded.", true);
+  applyBuilderLocked();
+  if (!_builderLocked) setOut("Loaded.", true);
 }
 
 function persistSelectedExamPeriod(id) {
@@ -839,10 +933,15 @@ async function bootstrap() {
   const rows = Array.isArray(r?.examPeriods) ? r.examPeriods : [];
   const epId = Number(r?.examPeriodId || 0);
   const test = r?.test || null;
+  setBuilderLocked(!!r?.locked, { openAtUtc: r?.openAtUtc, serverNow: r?.serverNow, durationMinutes: r?.durationMinutes });
 
-  elExamPeriod.innerHTML = `<option value="">Select exam period</option>` + rows
-    .map((p) => `<option value="${escapeHtml(String(p.id))}">${escapeHtml(String(p.name || `Exam period ${p.id}`))}</option>`)
-    .join("");
+  if (!rows.length) {
+    elExamPeriod.innerHTML = `<option value="">No exam periods</option>`;
+  } else {
+    elExamPeriod.innerHTML = rows
+      .map((p) => `<option value="${escapeHtml(String(p.id))}">${escapeHtml(String(p.name || `Exam period ${p.id}`))}</option>`)
+      .join("");
+  }
 
   if (rows.length) {
     const want = preferred && rows.some((p) => Number(p?.id || 0) === preferred)
@@ -864,10 +963,12 @@ async function bootstrap() {
   renderListeningAudioStatus();
   renderQuestionsList();
   applyEditorsForTab(_qTab || "listening");
-  setOut("Loaded.", true);
+  applyBuilderLocked();
+  if (!_builderLocked) setOut("Loaded.", true);
 }
 
 async function saveTest() {
+  if (_builderLocked) throw new Error("Locked: test has started.");
   const ep = getSelectedExamPeriodId();
   if (!ep) throw new Error("Select an exam period first.");
   ensureWritingDefaults();
@@ -911,22 +1012,69 @@ function wireEvents() {
 
   elUploadListeningAudio?.addEventListener("click", async () => {
     try {
+      if (_builderLocked) throw new Error("Locked: test has started.");
       const ep = getSelectedExamPeriodId();
       if (!ep) throw new Error("Select an exam period first.");
       const f = elListeningAudioFile?.files && elListeningAudioFile.files[0] ? elListeningAudioFile.files[0] : null;
       if (!f) throw new Error("Pick an MP3 file first.");
+      const stop = busyStart("Uploading...");
+      const j = await (async () => {
+        async function uploadChunked(chunkBytes) {
+          const init = await fetch(`/api/admin/listening-audio/chunk/init?examPeriodId=${encodeURIComponent(String(ep))}`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: f.name || "listening.mp3", size: Number(f.size || 0), chunkBytes }),
+          });
+          const ij = await init.json().catch(() => ({}));
+          if (!init.ok) throw new Error(String(ij?.message || ij?.error || `Init failed (${init.status})`));
+          const uploadId = String(ij?.uploadId || "").trim();
+          const negotiated = Number(ij?.chunkBytes || chunkBytes);
+          if (!uploadId) throw new Error("Chunk init failed (missing uploadId).");
 
-      const fd = new FormData();
-      fd.append("audio", f, f.name || "listening.mp3");
+          const totalBytes = Number(f.size || 0);
+          const chunkSize = Math.max(64 * 1024, Number.isFinite(negotiated) ? negotiated : chunkBytes);
+          const totalChunks = Math.max(1, Math.ceil(totalBytes / chunkSize));
 
-      const stop = busyStart("Uploading…");
-      const r = await fetch(`/api/admin/listening-audio?examPeriodId=${encodeURIComponent(String(ep))}`, {
-        method: "POST",
-        body: fd,
-        credentials: "same-origin",
-      }).finally(() => stop());
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(String(j?.message || j?.error || `Upload failed (${r.status})`));
+          for (let i = 0; i < totalChunks; i++) {
+            const start = i * chunkSize;
+            const end = Math.min(totalBytes, start + chunkSize);
+            const blob = f.slice(start, end);
+            const r = await fetch(`/api/admin/listening-audio/chunk/part?uploadId=${encodeURIComponent(uploadId)}&index=${encodeURIComponent(String(i))}`, {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/octet-stream" },
+              body: blob,
+            });
+            if (r.status === 413) throw Object.assign(new Error("Chunk too large (413)"), { code: "chunk_413" });
+            const pj = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(String(pj?.message || pj?.error || `Chunk failed (${r.status})`));
+          }
+
+          const fin = await fetch(`/api/admin/listening-audio/chunk/complete`, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadId, totalChunks, totalBytes }),
+          });
+          const fj = await fin.json().catch(() => ({}));
+          if (!fin.ok) throw new Error(String(fj?.message || fj?.error || `Complete failed (${fin.status})`));
+          return fj;
+        }
+
+        const sizes = [900 * 1024, 512 * 1024, 256 * 1024, 128 * 1024];
+        let lastErr = null;
+        for (const sz of sizes) {
+          try {
+            return await uploadChunked(sz);
+          } catch (e) {
+            lastErr = e;
+            if (String(e?.code || "") === "chunk_413") continue;
+            throw e;
+          }
+        }
+        throw lastErr || new Error("Upload failed.");
+      })().finally(() => stop());
       const url = String(j?.url || "").trim();
       if (!url) throw new Error("Upload succeeded but no URL was returned.");
 
@@ -1073,6 +1221,13 @@ function wireEvents() {
   });
 
   elQuestionsList?.addEventListener("click", async (e) => {
+    if (_builderLocked) {
+      const btn = e.target?.closest?.("button[data-action]");
+      if (btn) {
+        e.preventDefault();
+        return setOut("Locked: test has started.", false);
+      }
+    }
     const btn = e.target?.closest?.("button[data-action]");
     if (btn) {
       e.preventDefault();
@@ -1131,6 +1286,7 @@ async function main() {
     elQuestionsList.innerHTML = `<div class="bad">Failed to load: ${escapeHtml(msg)}</div>`;
   }
   wireEvents();
+  applyBuilderLocked();
 }
 
 main();

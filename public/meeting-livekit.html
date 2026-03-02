@@ -6,6 +6,33 @@
   <title>Speaking Meeting</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="icon" href="/favicon.ico" />
+  <style>
+    .lkGrid{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:12px;
+      margin-top:12px;
+    }
+    @media (max-width: 900px){
+      .lkGrid{ grid-template-columns: 1fr; }
+    }
+    .lkVideoBox{
+      background:#0f172a;
+      border-radius:12px;
+      overflow:hidden;
+      position:relative;
+      aspect-ratio: 16 / 9;
+      min-height: 260px;
+    }
+    .lkVideo{
+      width:100%;
+      height:100%;
+      background:#111827;
+    }
+    .lkVideoLocal{ object-fit:cover; transform:scaleX(-1); }
+    /* Keep a stable 16:9 viewport for remote; show portrait videos without cropping. */
+    .lkVideoRemote{ object-fit:contain; }
+  </style>
 </head>
 <body>
   <div class="wrap" style="max-width:1200px;">
@@ -18,14 +45,25 @@
       <div id="meetingError" class="notice bad" style="display:none; margin-top:10px;"></div>
       <div id="meetingStatus" class="notice ok" style="display:none; margin-top:10px;"></div>
 
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:12px;">
-        <div style="background:#0f172a; border-radius:12px; min-height:260px; overflow:hidden; position:relative;">
-          <video id="localVideo" autoplay playsinline muted style="width:100%; height:100%; object-fit:cover; background:#111827;"></video>
-          <div class="mono" style="position:absolute; left:8px; bottom:8px; padding:4px 8px; border-radius:8px; background:rgba(0,0,0,.5); color:#fff; font-size:12px;">You</div>
+      <div class="lkGrid">
+        <div class="lkVideoBox">
+          <video id="localVideo" class="lkVideo lkVideoLocal" autoplay playsinline muted></video>
+          <div class="mono" id="localLabel" style="position:absolute; left:8px; bottom:8px; padding:4px 8px; border-radius:8px; background:rgba(0,0,0,.5); color:#fff; font-size:12px;">You</div>
         </div>
-        <div style="background:#0f172a; border-radius:12px; min-height:260px; overflow:hidden; position:relative;">
-          <video id="remoteVideo" autoplay playsinline style="width:100%; height:100%; object-fit:cover; background:#111827;"></video>
+        <div class="lkVideoBox">
+          <video id="remoteVideo" class="lkVideo lkVideoRemote" autoplay playsinline></video>
           <div class="mono" id="remoteLabel" style="position:absolute; left:8px; bottom:8px; padding:4px 8px; border-radius:8px; background:rgba(0,0,0,.5); color:#fff; font-size:12px;">Waiting for second participant...</div>
+        </div>
+      </div>
+
+      <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-top:14px;">
+        <div style="min-width:260px;">
+          <div class="help mono" style="margin-bottom:6px;">Camera</div>
+          <select id="camSelect" class="input mono" style="max-width:360px;"></select>
+        </div>
+        <div style="min-width:260px;">
+          <div class="help mono" style="margin-bottom:6px;">Microphone</div>
+          <select id="micSelect" class="input mono" style="max-width:360px;"></select>
         </div>
       </div>
 

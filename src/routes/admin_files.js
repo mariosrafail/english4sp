@@ -5,6 +5,38 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
   if (!app) throw new Error("admin_files_routes_missing_app");
   if (!ensureInit || !adminAuth || !DB || !Storage || !streamFileWithRange) throw new Error("admin_files_routes_missing_ctx");
 
+  async function getTestLockState(examPeriodId, examPeriods) {
+    const now = Date.now();
+    let openAtUtc = null;
+    let durationMinutes = null;
+
+    try {
+      const rows = Array.isArray(examPeriods) ? examPeriods : (typeof DB.listExamPeriods === "function" ? await DB.listExamPeriods() : []);
+      const eps = Array.isArray(rows) ? rows : [];
+      const row = eps.find((r) => Number(r?.id || 0) === Number(examPeriodId));
+      const o = Number(row?.openAtUtc);
+      const d = Number(row?.durationMinutes);
+      if (Number.isFinite(o) && o > 0) openAtUtc = o;
+      if (Number.isFinite(d) && d > 0) durationMinutes = Math.round(d);
+    } catch {}
+
+    // Fallback for adapters without per-period open time (or older schemas).
+    if (!Number.isFinite(Number(openAtUtc)) || Number(openAtUtc) <= 0) {
+      try {
+        if (typeof DB.getConfig === "function") {
+          const cfg = DB.getConfig() || {};
+          const o = Number(cfg.openAtUtc);
+          const d = Number(cfg.durationMinutes);
+          if (Number.isFinite(o) && o > 0) openAtUtc = o;
+          if (Number.isFinite(d) && d > 0) durationMinutes = Math.round(d);
+        }
+      } catch {}
+    }
+
+    const locked = Number.isFinite(Number(openAtUtc)) && now >= Number(openAtUtc);
+    return { locked, serverNow: now, openAtUtc, durationMinutes };
+  }
+
   app.get("/api/admin/files/index", async (req, res) => {
     await ensureInit();
     const a = await adminAuth(req, res);
@@ -30,14 +62,18 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
       if (!Number.isFinite(id) || id <= 0) continue;
       const relPath = `listening/ep_${id}/listening.mp3`;
       const st = await Storage.statFile(relPath);
+      const lock = await getTestLockState(id, examPeriods);
+      const pubUrl = st.exists && typeof Storage.publicUrlForPath === "function" ? Storage.publicUrlForPath(relPath) : "";
       listening.push({
         examPeriodId: id,
         examPeriodName: String(ep?.name || `Exam period ${id}`),
         relPath,
+        locked: !!lock.locked,
+        openAtUtc: lock.openAtUtc ?? null,
         exists: !!st.exists,
         size: st.exists ? st.size : 0,
         mtimeMs: st.exists ? st.mtimeMs : 0,
-        url: st.exists ? `/api/admin/files/download?path=${encodeURIComponent(relPath)}` : "",
+        url: st.exists ? (pubUrl || `/api/admin/files/download?path=${encodeURIComponent(relPath)}`) : "",
       });
     }
 
@@ -53,6 +89,7 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
       }
       const exists = !!(st && st.exists);
       const examPeriodId = Number(s?.examPeriodId || 0) || null;
+      const pubUrl = exists && typeof Storage.publicUrlForPath === "function" ? Storage.publicUrlForPath(relPath) : "";
       snapshots.push({
         id: Number(s?.id || 0) || null,
         sessionId: Number(s?.sessionId || 0) || null,
@@ -67,7 +104,7 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
         exists,
         size: exists ? st.size : 0,
         mtimeMs: exists ? st.mtimeMs : 0,
-        url: exists ? `/api/admin/files/download?path=${encodeURIComponent(relPath)}` : "",
+        url: exists ? (pubUrl || `/api/admin/files/download?path=${encodeURIComponent(relPath)}`) : "",
       });
     }
 
@@ -126,6 +163,7 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
         }
         const exists = !!(st && st.exists);
         const examPeriodId = Number(s?.examPeriodId || 0) || null;
+        const pubUrl = exists && typeof Storage.publicUrlForPath === "function" ? Storage.publicUrlForPath(relPath) : "";
         out.push({
           id: Number(s?.id || 0) || null,
           sessionId: Number(s?.sessionId || 0) || null,
@@ -140,7 +178,7 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
           exists,
           size: exists ? st.size : 0,
           mtimeMs: exists ? st.mtimeMs : 0,
-          url: exists ? `/api/admin/files/download?path=${encodeURIComponent(relPath)}` : "",
+          url: exists ? (pubUrl || `/api/admin/files/download?path=${encodeURIComponent(relPath)}`) : "",
         });
       }
 
@@ -195,6 +233,10 @@ module.exports = function registerAdminFilesRoutes(app, ctx) {
         if (!DB.getAdminTest || !DB.setAdminTest) return res.status(501).json({ error: "Not supported on this database adapter" });
         const ep = Number(req.body?.examPeriodId || 0);
         if (!Number.isFinite(ep) || ep <= 0) return res.status(400).json({ error: "invalid_exam_period" });
+
+        const lock = await getTestLockState(ep);
+        if (lock.locked) return res.status(423).json({ error: "locked", message: "Test is locked (already started).", examPeriodId: ep, ...lock });
+
         const relPath = `listening/ep_${ep}/listening.mp3`;
         try {
           await Storage.deleteFile(relPath);

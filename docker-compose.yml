@@ -3,11 +3,16 @@ services:
     build: .
     depends_on:
       - livekit
+    env_file:
+      - .env
     environment:
+      NODE_ENV: ${NODE_ENV:-production}
       PORT: ${PORT:-8080}
       DATABASE_URL: ${DATABASE_URL}
       CORS_ORIGIN: ${CORS_ORIGIN:-"*"}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      ADMIN_SESSION_SECRET: ${ADMIN_SESSION_SECRET}
+      EXAMINER_SESSION_SECRET: ${EXAMINER_SESSION_SECRET}
       SPEAKING_PROVIDER: ${SPEAKING_PROVIDER:-livekit}
       LIVEKIT_URL: ${LIVEKIT_URL}
       LIVEKIT_API_URL: ${LIVEKIT_API_URL:-http://livekit:7880}
@@ -17,15 +22,21 @@ services:
     restart: unless-stopped
     ports:
       - "8080:8080"
+    volumes:
+      - app_storage:/app/storage
+      - app_uploads:/app/public/uploads
 
   livekit:
-    image: livekit/livekit-server:latest
+    build: ./deploy/livekit
+    image: eng4sp-livekit:local
     container_name: livekit-server
     restart: unless-stopped
     command: ["--config", "/etc/livekit.yaml"]
-    volumes:
-      - ./deploy/livekit/livekit.yaml:/etc/livekit.yaml:ro
     ports:
       - "7880:7880"
       - "7881:7881"
       - "50000-50100:50000-50100/udp"
+
+volumes:
+  app_storage:
+  app_uploads:
