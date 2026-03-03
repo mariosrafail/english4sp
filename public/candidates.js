@@ -28,10 +28,6 @@ const elReviewClose = qs("#reviewClose");
 const elReviewTitle = qs("#reviewTitle");
 const elReviewMeta = qs("#reviewMeta");
 const elReviewBody = qs("#reviewBody");
-const elExportDetailsOverlay = qs("#exportDetailsOverlay");
-const elExportDetailsYes = qs("#btnExportDetailsYes");
-const elExportDetailsNo = qs("#btnExportDetailsNo");
-const elExportDetailsCancel = qs("#btnExportDetailsCancel");
 
 const IS_EMBEDDED = (() => {
   try {
@@ -173,33 +169,14 @@ function hideCandidatesBusy() {
 }
 
 function askIncludeDetailedGrades() {
-  return new Promise((resolve) => {
-    if (!elExportDetailsOverlay || !elExportDetailsYes || !elExportDetailsNo || !elExportDetailsCancel) {
-      resolve(false);
-      return;
+  return uiConfirm(
+    "Include detailed grades in this export?",
+    {
+      title: "Export Options",
+      yesText: "Yes",
+      noText: "No",
     }
-
-    elExportDetailsOverlay.style.display = "flex";
-
-    const cleanup = () => {
-      elExportDetailsOverlay.style.display = "none";
-      elExportDetailsYes.removeEventListener("click", onYes);
-      elExportDetailsNo.removeEventListener("click", onNo);
-      elExportDetailsCancel.removeEventListener("click", onCancel);
-      elExportDetailsOverlay.removeEventListener("click", onOverlayClick);
-    };
-    const onYes = () => { cleanup(); resolve(true); };
-    const onNo = () => { cleanup(); resolve(false); };
-    const onCancel = () => { cleanup(); resolve(null); };
-    const onOverlayClick = (e) => {
-      if (e.target === elExportDetailsOverlay) onCancel();
-    };
-
-    elExportDetailsYes.addEventListener("click", onYes);
-    elExportDetailsNo.addEventListener("click", onNo);
-    elExportDetailsCancel.addEventListener("click", onCancel);
-    elExportDetailsOverlay.addEventListener("click", onOverlayClick);
-  });
+  );
 }
 
 function getPeriodById(id) {
@@ -518,7 +495,7 @@ elBtnExportSelected?.addEventListener("click", async () => {
     elBtnExportSelected.disabled = true;
     const rows = allRows.filter((r) => selectedIds.has(Number(r.sessionId)));
     const includeDetailed = await askIncludeDetailedGrades();
-    if (includeDetailed === null) return;
+    if (includeDetailed == null) return;
     showCandidatesBusy("Processing. Don't close this page. Please wait...");
     await exportRows(rows, "selected", includeDetailed);
   } catch (e) {

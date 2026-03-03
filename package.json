@@ -5,7 +5,9 @@
   "type": "commonjs",
   "scripts": {
     "dev": "node server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "stress:candidates": "node scripts/stress_candidates.js",
+    "probe:snapshot": "node scripts/probe_snapshot_limit.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

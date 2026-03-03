@@ -159,6 +159,37 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     return null;
   }
 
+  async function makeSnapshotPngBlob(videoEl, maxW) {
+    const vw = Number(videoEl?.videoWidth || 0);
+    const vh = Number(videoEl?.videoHeight || 0);
+    if (!vw || !vh) return null;
+
+    const canvas = document.createElement("canvas");
+    const limitW = Math.max(160, Math.floor(Number(maxW || 640)));
+    const scale = vw > limitW ? (limitW / vw) : 1;
+    const tw = Math.max(1, Math.round(vw * scale));
+    const th = Math.max(1, Math.round(vh * scale));
+    canvas.width = tw;
+    canvas.height = th;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(videoEl, 0, 0, tw, th);
+    return new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+  }
+
+  async function buildAdaptiveSnapshotBlob(videoEl) {
+    const TARGET_MAX_BYTES = 850 * 1024;
+    const widths = [640, 560, 480, 420, 360, 320, 280, 240];
+    let last = null;
+    for (const w of widths) {
+      const blob = await makeSnapshotPngBlob(videoEl, w);
+      if (!blob) continue;
+      last = blob;
+      if (blob.size <= TARGET_MAX_BYTES) return blob;
+    }
+    return last;
+  }
+
   async function captureAndUploadSnapshot(reason) {
     if (snapshotInFlight) return;
     if (snapshotsTaken >= MAX_SNAPSHOTS) return;
@@ -202,18 +233,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     snapshotInFlight = true;
     lastSnapshotAt = now;
     try {
-      const canvas = document.createElement("canvas");
-      const maxW = 640;
-      const scale = vw > maxW ? (maxW / vw) : 1;
-      const tw = Math.max(1, Math.round(vw * scale));
-      const th = Math.max(1, Math.round(vh * scale));
-      canvas.width = tw;
-      canvas.height = th;
-      const ctx = canvas.getContext("2d");
-      if (!ctx) return;
-      ctx.drawImage(videoEl, 0, 0, tw, th);
-
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+      const blob = await buildAdaptiveSnapshotBlob(videoEl);
       if (!blob) return;
 
       const fd = new FormData();
@@ -222,12 +242,28 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       fd.append("stamp", stamp);
       fd.append("image", blob, "snapshot.png");
 
-      const r = await fetch(`/api/session/${encodeURIComponent(token)}/snapshot`, {
+      let r = await fetch(`/api/session/${encodeURIComponent(token)}/snapshot`, {
         method: "POST",
         body: fd,
         credentials: "same-origin",
       });
-      const j = await r.json().catch(() => ({}));
+      let j = await r.json().catch(() => ({}));
+      if (!r.ok && r.status === 413) {
+        const retryBlob = await makeSnapshotPngBlob(videoEl, 240);
+        if (retryBlob) {
+          const fd2 = new FormData();
+          fd2.append("reason", r0);
+          fd2.append("titlePrefix", titlePrefix);
+          fd2.append("stamp", stamp);
+          fd2.append("image", retryBlob, "snapshot.png");
+          r = await fetch(`/api/session/${encodeURIComponent(token)}/snapshot`, {
+            method: "POST",
+            body: fd2,
+            credentials: "same-origin",
+          });
+          j = await r.json().catch(() => ({}));
+        }
+      }
       if (!r.ok) {
         if (r.status === 429 || j?.error === "snapshot_limit_reached") snapshotsTaken = MAX_SNAPSHOTS;
         return;
