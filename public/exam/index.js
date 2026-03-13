@@ -7,6 +7,7 @@ import { createExamLockdownHelpers } from "/exam/lockdown.js";
 import { createExamCameraHelpers } from "/exam/camera.js";
 import { createExamTranslationHelpers } from "/exam/translation.js";
 import { createExamFlowHelpers } from "/exam/flow.js";
+import { createExamFocusHelpers } from "/exam/focus.js";
   const params = new URLSearchParams(location.search);
   const token = (params.get("token") || "").trim();
 
@@ -270,6 +271,7 @@ import { createExamFlowHelpers } from "/exam/flow.js";
   let startTimerAbsolute = ()=> {};
   let doSubmit = async ()=> {};
   let boot = async ()=> {};
+  let armFocusMonitoring = ()=> {};
 
   const startTimerAbsoluteRef = { current: (...args)=> startTimerAbsolute(...args) };
   const doSubmitRef = { current: (...args)=> doSubmit(...args) };
@@ -492,101 +494,23 @@ import { createExamFlowHelpers } from "/exam/flow.js";
     LS_KEY,
   }));
 
-  // Tab/window/app focus detection.
-  // We count a violation when the user returns (tab becomes visible OR window regains focus)
-  // so the warning is visible to them.
-  let lastHiddenAt = 0;
-  let lastBlurAt = 0;
-  let lastViolationAt = 0; // debounce duplicate signals (e.g., blur + visibilitychange)
+  ({
+    armFocusMonitoring,
+  } = createExamFocusHelpers({
+    LS_KEY,
+    getExamStarted: ()=> examStarted,
+    getTabViolations: ()=> tabViolations,
+    setTabViolations: (value)=> { tabViolations = value; },
+    MAX_TAB_VIOLATIONS,
+    pingPresence,
+    scheduleReturnSnapshot: (reason, delayMs)=> scheduleReturnSnapshot(reason, delayMs),
+    clearReturnSnapshotTimer: ()=> clearReturnSnapshotTimer(),
+    showTabToast: (title, body, ms)=> showTabToast(title, body, ms),
+    setAutoReason: (value)=> { autoReason = value; },
+    doSubmit: (auto)=> doSubmit(auto),
+  }));
 
-  async function registerFocusViolation(reason, awayMs){
-    if (!examStarted) return;
-    const now = Date.now();
-    if (lastViolationAt && (now - lastViolationAt) < 600) return;
-    lastViolationAt = now;
-
-    tabViolations++;
-    localStorage.setItem(LS_KEY("tabViolations"), String(tabViolations));
-    try{ await pingPresence(reason || "focus_violation"); }catch(e){}
-    scheduleReturnSnapshot(`return_after_${String(reason || "focus_violation")}`, 1000);
-
-    showTabToast(
-      "Do not switch tabs, windows, or apps during the exam.",
-      `${awayMs ? `Away for ${Math.ceil(awayMs/1000)}s. ` : ""}Violations: ${tabViolations}/${MAX_TAB_VIOLATIONS}`,
-      3000
-    );
-
-    if (tabViolations >= MAX_TAB_VIOLATIONS){
-      autoReason = "tab_violations_max";
-      await doSubmit(true);
-    }
-  }
-  document.addEventListener("visibilitychange", async ()=>{
-    if (!examStarted) return;
-    if (document.hidden){
-      clearReturnSnapshotTimer();
-      lastHiddenAt = Date.now();
-      await pingPresence("tab_hidden");
-    }else{
-      const awayMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
-      lastHiddenAt = 0;
-      await registerFocusViolation("tab_visible", awayMs);
-    }
-  });
-
-  window.addEventListener("blur", async ()=>{
-    if (!examStarted) return;
-    clearReturnSnapshotTimer();
-    lastBlurAt = Date.now();
-    await pingPresence("window_blur");
-  });
-  window.addEventListener("focus", async ()=>{
-    if (!examStarted) return;
-    const awayMs = lastBlurAt ? (Date.now() - lastBlurAt) : 0;
-    lastBlurAt = 0;
-    if (awayMs > 0 && !document.hidden){
-      await pingPresence("window_focus_warning");
-      showTabToast(
-        "Keep the exam on your active screen.",
-        "If you are using a second monitor, disconnect it and continue on one display only.",
-        3000
-      );
-    }
-  });
-
-  let mouseOutTimer = null;
-  let lastPointerViolationAt = 0;
-  const POINTER_LEAVE_TRIGGER_MS = 900;
-
-  function clearMouseOutTimer(){
-    if (mouseOutTimer){
-      clearTimeout(mouseOutTimer);
-      mouseOutTimer = null;
-    }
-  }
-
-  document.addEventListener("mouseout", (e)=>{
-    if (!examStarted) return;
-    if (e && (e.relatedTarget || e.toElement)) return;
-    clearMouseOutTimer();
-    mouseOutTimer = setTimeout(async ()=>{
-      if (!examStarted) return;
-      const now = Date.now();
-      if (lastPointerViolationAt && (now - lastPointerViolationAt) < 1500) return;
-      lastPointerViolationAt = now;
-
-      try{ await pingPresence("pointer_left"); }catch(e){}
-
-      showTabToast(
-        "Keep your mouse inside the exam window.",
-        "If you are using a second monitor, disconnect it and continue on one display only.",
-        3000
-      );
-    }, POINTER_LEAVE_TRIGGER_MS);
-  });
-  document.addEventListener("mouseover", ()=>{
-    clearMouseOutTimer();
-  });
+  armFocusMonitoring();
 
   // when auto-submitting, include a simple reason tag for the server logs
   let autoReason = "";
