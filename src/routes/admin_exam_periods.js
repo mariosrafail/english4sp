@@ -56,8 +56,7 @@ module.exports = function registerAdminExamPeriodsRoutes(app, ctx) {
     res.json({
       token: created.token,
       sessionId: created.sessionId,
-      url: `${base}/exam.html?token=${created.token}&sid=${created.sessionId}`,
+      url: `${base}/exam/?token=${created.token}&sid=${created.sessionId}`,
     });
   });
 };
-

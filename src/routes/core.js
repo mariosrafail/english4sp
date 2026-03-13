@@ -8,25 +8,51 @@ module.exports = function registerCoreRoutes(app, ctx) {
     throw new Error("core_routes_missing_ctx");
   }
 
+  const legacyPageRedirects = new Map([
+    ["/", "/admin/login.html"],
+    ["/index.html", "/admin/login.html"],
+    ["/admin.html", "/admin/"],
+    ["/admin-files.html", "/admin/files.html"],
+    ["/admin-tests.html", "/admin/tests.html"],
+    ["/admin-test-preview.html", "/admin/test-preview.html"],
+    ["/candidates.html", "/candidates/"],
+    ["/candidates2.html", "/examiners/candidates.html"],
+    ["/examiners.html", "/examiners/"],
+    ["/meeting.html", "/meetings/manual.html"],
+    ["/meeting-livekit.html", "/meetings/livekit.html"],
+    ["/speaking.html", "/speaking/"],
+    ["/speaking-scheduling.html", "/speaking/scheduling.html"],
+    ["/exam.html", "/exam/"],
+  ]);
+
+  app.use((req, res, next) => {
+    const target = legacyPageRedirects.get(req.path);
+    if (!target) return next();
+    const suffix = req.url.includes("?") ? req.url.slice(req.url.indexOf("?")) : "";
+    return res.redirect(302, `${target}${suffix}`);
+  });
+
   // Guard admin UI file (server-side). API routes are guarded per-endpoint.
   app.use(async (req, res, next) => {
-    if (req.path !== "/admin.html" && req.path !== "/speaking-scheduling.html") return next();
+    if (!["/admin/", "/admin/index.html", "/admin/files.html", "/admin/tests.html", "/speaking/scheduling.html"].includes(req.path)) {
+      return next();
+    }
     const a = await adminAuth(req, res);
     if (a.ok) return next();
-    return res.redirect("/index.html");
+    return res.redirect("/admin/login.html");
   });
 
   // Guard examiner UI file (server-side).
   app.use(async (req, res, next) => {
-    if (req.path !== "/candidates2.html") return next();
+    if (req.path !== "/examiners/candidates.html") return next();
     const a = await examinerAuth(req, res);
     if (a.ok) return next();
-    return res.redirect("/examiners.html");
+    return res.redirect("/examiners/");
   });
 
   // Best-effort: discourage built-in browser translation on the candidate exam page.
   app.use((req, res, next) => {
-    if (req.path !== "/exam.html") return next();
+    if (req.path !== "/exam/" && req.path !== "/exam/index.html") return next();
     res.setHeader("Content-Language", "en");
     res.setHeader("X-Content-Type-Options", "nosniff");
     next();

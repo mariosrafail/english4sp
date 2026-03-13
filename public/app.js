@@ -21,11 +21,11 @@ export async function apiGet(url, { busy, busyText = "Loading..." } = {}){
     const j = await r.json().catch(()=> ({}));
     if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
       // Not logged in, send to landing.
-      location.href = "/index.html";
+      location.href = "/admin/login.html";
       throw new Error("Not authenticated");
     }
     if (r.status === 401 && String(url || "").startsWith("/api/examiner")) {
-      location.href = "/examiners.html";
+      location.href = "/examiners/";
       throw new Error("Not authenticated");
     }
     if (!r.ok) {
@@ -51,11 +51,11 @@ export async function apiPost(url, body, { busy, busyText = "Working..." } = {})
     });
     const j = await r.json().catch(()=> ({}));
     if (r.status === 401 && String(url || "").startsWith("/api/admin")) {
-      location.href = "/index.html";
+      location.href = "/admin/login.html";
       throw new Error("Not authenticated");
     }
     if (r.status === 401 && String(url || "").startsWith("/api/examiner")) {
-      location.href = "/examiners.html";
+      location.href = "/examiners/";
       throw new Error("Not authenticated");
     }
     if (!r.ok) {

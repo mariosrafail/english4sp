@@ -44,11 +44,7 @@ const { parseAnswersJson, buildReviewItems } = require("./utils/review");
 const rootDir = path.resolve(__dirname, "..");
 
 // DB selection: if DATABASE_URL exists, use Postgres; else SQLite.
-const hasPg = !!(
-  process.env.DATABASE_URL ||
-  process.env.NETLIFY_DATABASE_URL_UNPOOLED ||
-  process.env.NETLIFY_DATABASE_URL
-);
+const hasPg = !!process.env.DATABASE_URL;
 const DB = hasPg ? require("./db_pg") : require("./db");
 
 let initPromise = null;

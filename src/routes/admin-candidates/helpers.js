@@ -139,8 +139,8 @@ function createAdminCandidatesHelpers(deps) {
     const base = String(publicBase || "").trim();
 
     const exportRows = (created?.sessions || []).map((s) => {
-      const url = `${base}/exam.html?token=${s.token}&sid=${s.sessionId}`;
-      const speakingUrl = `${base}/speaking.html?token=${encodeURIComponent(String(s.token || ""))}`;
+      const url = `${base}/exam/?token=${s.token}&sid=${s.sessionId}`;
+      const speakingUrl = `${base}/speaking/?token=${encodeURIComponent(String(s.token || ""))}`;
       return {
         name: String(s.name || ""),
         email: String(s.email || ""),

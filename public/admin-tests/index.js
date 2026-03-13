@@ -753,7 +753,7 @@ function wireEvents() {
       if (!ep) throw new Error("Select an exam period first.");
       await saveTest();
       const w = window.open(
-        `/admin-test-preview.html?examPeriodId=${encodeURIComponent(String(ep))}`,
+        `/admin/test-preview.html?examPeriodId=${encodeURIComponent(String(ep))}`,
         "_blank",
         "noopener,noreferrer"
       );

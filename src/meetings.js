@@ -314,7 +314,7 @@ async function createSelfHostedMeetingForSlot(slot) {
     const base = selfHostedMeetingBase();
     const jitsiBase = selfHostedJitsiBase();
     const query = `room=${encodeURIComponent(room)}${jitsiBase ? `&base=${encodeURIComponent(jitsiBase)}` : ""}`;
-    const joinUrl = base ? `${base}/meeting.html?${query}` : `/meeting.html?${query}`;
+    const joinUrl = base ? `${base}/meetings/manual.html?${query}` : `/meetings/manual.html?${query}`;
     return {
       meetingId: room,
       joinUrl,
@@ -347,7 +347,7 @@ async function createSelfHostedMeetingForSlot(slot) {
   if (provider === "livekit") {
     const base = selfHostedMeetingBase();
     const query = `room=${encodeURIComponent(room)}`;
-    const joinUrl = base ? `${base}/meeting-livekit.html?${query}` : `/meeting-livekit.html?${query}`;
+    const joinUrl = base ? `${base}/meetings/livekit.html?${query}` : `/meetings/livekit.html?${query}`;
     return {
       meetingId: room,
       joinUrl,

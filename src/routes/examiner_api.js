@@ -39,7 +39,7 @@ module.exports = function registerExaminerRoutes(app, ctx) {
       const tok = String(r?.sessionToken || "").trim();
       return {
         ...r,
-        speakingUrl: tok ? `${base}/speaking.html?token=${encodeURIComponent(tok)}` : "",
+        speakingUrl: tok ? `${base}/speaking/?token=${encodeURIComponent(tok)}` : "",
       };
     });
     res.json(rows);

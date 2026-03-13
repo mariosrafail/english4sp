@@ -1,0 +1,300 @@
+.toolbar{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      align-items:stretch;
+      justify-content:flex-start;
+      margin: 10px 0 10px 0;
+    }
+    .searchWrap{display:flex; gap:10px; align-items:center; width:100%}
+    .searchWrap input{flex:1; background:#fff !important; color:#111 !important; font-size:14px !important; -webkit-text-fill-color:#858585 !important; padding:10px 12px !important;}
+    .searchWrap input::placeholder{color: var(--muted) !important; opacity:1;}
+    .searchWrap button{width:auto !important; flex:0 0 auto !important; padding:10px 12px !important; border-radius:10px !important;}
+    .filtersUnder{display:flex; align-items:center; gap:10px; margin-top:-2px}
+    .controlsRow{display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; margin-top:0}
+    .rightControls{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+    .rightControls select,
+    .rightControls button{width:auto !important}
+    .rightControls select{min-width:160px}
+    #tbl input[type="checkbox"]{width:auto; transform:translateY(1px)}
+    .bulkActionsBox{
+      margin-top:10px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+      padding:10px;
+      border: var(--border);
+      border-radius:12px;
+      background:#fff;
+    }
+    .bulkActionsBox select,
+    .bulkActionsBox button{width:auto !important}
+    .bulkActionsBox select{min-width:190px}
+
+.toolbar{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      align-items:stretch;
+      justify-content:flex-start;
+      margin: 10px 0 10px 0;
+    }
+                    .filtersUnder{display:flex; align-items:center; gap:10px; margin-top:-2px}
+    .controlsRow{display:flex; align-items:center; justify-content:flex-end; gap:10px; flex-wrap:wrap; margin-top:0}
+    .rightControls{display:flex; gap:10px; align-items:center; flex-wrap:wrap}
+
+                    .pill{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      padding:8px 10px;
+      border-radius:10px;
+      border: var(--border);
+      background:#fff;
+      color: var(--muted);
+      font-size:12px;
+      cursor:pointer;
+      user-select:none;
+    }
+    .pill input{width:auto; margin:0}
+    .pager{
+      display:flex; gap:10px; align-items:center; justify-content:flex-end;
+      margin-top: 12px;
+      flex-wrap:wrap;
+    }
+    .pager button{width:auto; padding:10px 12px}
+        .kpi{display:flex; gap:10px; flex-wrap:wrap; margin-top:10px}
+    .kpi .badge{font-weight:800}
+    .rowlink{cursor:pointer}
+    .muted{color:var(--muted)}
+
+.dropzone{
+  border:2px dashed rgba(0,0,0,0.2);
+  border-radius:12px;
+  padding:16px;
+  text-align:center;
+  background:rgba(0,0,0,0.02);
+}
+.dropzone.dragover{
+  border-color:rgba(0,0,0,0.45);
+  background:rgba(0,0,0,0.05);
+}
+
+
+/* Examiner grading UI */
+.writingBox{
+  max-width: 360px;
+  max-height: none;
+  overflow: visible;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.055);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.miniInput{
+  width: 86px;
+}
+.gradeBtn{
+  padding: 8px 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px;
+  cursor: pointer;
+  background: rgba(34,197,94,0.25);
+}
+.gradeBtn:disabled{
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.gradeBtn.saved{
+  background: rgba(34,197,94,0.35);
+}
+.gradeBtn.error{
+  background: rgba(239,68,68,0.30);
+}
+
+/* Admin candidates delete button */
+.trashBtn{
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px solid rgba(239,68,68,0.25);
+  background: rgba(239,68,68,0.12);
+  cursor: pointer;
+}
+.trashBtn:hover{
+  background: rgba(239,68,68,0.18);
+}
+.trashBtn:disabled{
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.trashBtn svg{
+  width: 18px;
+  height: 18px;
+  fill: rgba(239,68,68,0.95);
+}
+
+/* Admin candidate review modal */
+.candidateOpenBtn{
+  width:auto;
+  padding:0;
+  border:0;
+  background:transparent;
+  color:var(--accent);
+  text-decoration:underline;
+  cursor:pointer;
+  font-weight:700;
+  border-radius:0;
+}
+.candidateOpenBtn:hover{
+  color:#1d4ed8;
+  box-shadow:none;
+}
+.reviewOverlay{
+  position:fixed;
+  inset:0;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  z-index:10020;
+  background:rgba(11,16,32,0.48);
+  padding:16px;
+}
+.reviewModal{
+  width:min(1100px, 100%);
+  max-height:88vh;
+  overflow:auto;
+  background:#fff;
+  border:var(--border);
+  border-radius:14px;
+  box-shadow:var(--shadow2);
+  padding:16px;
+  position:relative;
+}
+.reviewCloseBtn{
+  position:absolute;
+  top:10px;
+  right:10px;
+  width:auto;
+  min-width:36px;
+  padding:8px 10px;
+  border-radius:10px;
+  font-weight:900;
+}
+.reviewBody{
+  margin-top:10px;
+}
+
+/* Admin global blocking busy overlay */
+.adminBusyOverlay{
+  position:fixed;
+  inset:0;
+  z-index:10030;
+  display:none;
+  align-items:center;
+  justify-content:center;
+  background:rgba(11,16,32,0.45);
+  padding:16px;
+}
+.adminBusyCard{
+  width:min(720px, 100%);
+  background:transparent;
+  border:none;
+  border-radius:0;
+  box-shadow:none;
+  padding:0;
+  text-align:center;
+}
+.adminBusySpinner{
+  width:46px;
+  height:46px;
+  margin:0 auto 14px auto;
+  border-radius:999px;
+  border:4px solid rgba(255,255,255,0.26);
+  border-top-color:#fff;
+  animation:adminSpin 0.9s linear infinite;
+}
+.adminBusyText{
+  color:#fff;
+  font-size:16px;
+  font-weight:900;
+  text-shadow:0 2px 14px rgba(0,0,0,0.35);
+}
+.adminBusyBarWrap{
+  margin:14px auto 0 auto;
+  width:min(520px, 100%);
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+.adminBusyBar{
+  flex:1 1 auto;
+  height:12px;
+  border-radius:999px;
+  background:rgba(255,255,255,0.18);
+  border:1px solid rgba(255,255,255,0.22);
+  overflow:hidden;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.18);
+}
+.adminBusyBarFill{
+  height:100%;
+  width:0%;
+  border-radius:999px;
+  background: var(--accent);
+  transition: width 140ms ease;
+}
+.adminBusyPct{
+  flex:0 0 auto;
+  min-width:92px;
+  text-align:right;
+  color:#fff;
+  font-weight:900;
+  font-size:13px;
+  text-shadow:0 2px 14px rgba(0,0,0,0.35);
+}
+@keyframes adminSpin{
+  from{transform:rotate(0deg)}
+  to{transform:rotate(360deg)}
+}
+
+/* Tab violation toast (separate from fullscreen/camera lock overlay) */
+.toast{
+  position: fixed;
+  top: 84px;
+  right: 18px;
+  width: min(420px, calc(100vw - 36px));
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(18,18,18,0.96);
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 16px 40px rgba(0,0,0,0.45);
+  color: #ffffff;
+  z-index: 9999;
+  opacity: 0;
+  transform: translateY(-8px);
+  pointer-events: none;
+  transition: opacity 140ms ease, transform 140ms ease;
+}
+.toast.show{
+  opacity: 1;
+  transform: translateY(0);
+}
+.toastTitle{
+  font-weight: 700;
+  margin-bottom: 4px;
+  color: #ffffff;
+}
+.toastBody{
+  opacity: 1;
+  color: #e5e7eb;
+  font-size: 13px;
+  line-height: 1.35;
+}

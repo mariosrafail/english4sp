@@ -222,7 +222,7 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
       }
     } catch {}
 
-    const speakingUrl = `${getPublicBase(req)}/speaking.html?token=${encodeURIComponent(String(s.token || ""))}`;
+    const speakingUrl = `${getPublicBase(req)}/speaking/?token=${encodeURIComponent(String(s.token || ""))}`;
     let speakingAuto = null;
     let speakingAutoError = "";
     try {
@@ -237,7 +237,7 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
     }
 
     const base = getPublicBase(req);
-    const url = `${base}/exam.html?token=${s.token}&sid=${s.sessionId}`;
+    const url = `${base}/exam/?token=${s.token}&sid=${s.sessionId}`;
 
     res.json({
       ok: true,
