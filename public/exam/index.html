@@ -88,13 +88,9 @@
                 <h2>Camera check</h2>
                 <p id="cameraCheckText">Camera access is required to start the exam. The system checks that your face is visible.</p>
               </div>
-              <div class="gateSoundRow">
-                <button id="testSound" class="primary" type="button">Test sound</button>
-                <div id="testSoundStatus" class="small muted">Use Test sound to verify that your speakers or headphones work before starting.</div>
-              </div>
             </div>
 
-            <div class="videoWrap gateVideoWrap">
+            <div class="videoWrap gateVideoWrap gateCameraLayout">
               <div class="videoCard videoCard--preview">
                 <div class="faceBox">
                   <video id="video" playsinline autoplay muted disablePictureInPicture controlslist="nofullscreen noremoteplayback nodownload" disableRemotePlayback></video>
@@ -104,6 +100,19 @@
               </div>
 
               <div class="videoCard videoCard--controls">
+                <div class="gateControlActions">
+                  <div class="gateSoundRow gateSoundRow--stack">
+                    <button id="testSound" class="primary" type="button">Test sound</button>
+                    <div id="testSoundStatus" class="small muted">Use Test sound to verify that your speakers or headphones work before starting.</div>
+                  </div>
+
+                  <div class="gateButtonRow gateButtonRow--stack">
+                    <button id="enableCam" class="primary">Enable camera</button>
+                    <button id="goFullscreen" class="primary" type="button">Enter fullscreen mode</button>
+                    <button id="startExam" class="primary" disabled>Start exam</button>
+                  </div>
+                </div>
+
                 <div class="notice" id="gateNotice">Click "Enable camera" and keep your face visible.</div>
                 <div class="gateRequirements">
                   <div class="small gateRequirementsTitle">Requirements</div>
@@ -130,18 +139,6 @@
                   </div>
                   <div class="col gateRefreshCol">
                     <button id="refreshCams" class="primary" type="button">Refresh cameras</button>
-                  </div>
-                </div>
-
-                <div class="gateButtonRow row">
-                  <div class="col">
-                    <button id="enableCam" class="primary">Enable camera</button>
-                  </div>
-                  <div class="col">
-                    <button id="goFullscreen" class="primary" type="button">Enter fullscreen mode</button>
-                  </div>
-                  <div class="col">
-                    <button id="startExam" class="primary" disabled>Start exam</button>
                   </div>
                 </div>
               </div>

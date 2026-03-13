@@ -103,7 +103,7 @@ body.test-page{
               radial-gradient(900px 700px at 85% 0%, rgba(34,197,94,0.08), rgba(34,197,94,0.00) 55%),
               var(--bg);
 }
-body.test-page .wrap{ max-width: 1180px; }
+body.test-page .wrap{ max-width: 1320px; }
 body.test-page .card{ padding:20px; }
 body.test-page h1{ font-size:26px; letter-spacing:-0.02em; }
 body.test-page h2{ font-size:20px; letter-spacing:-0.02em; }
@@ -113,7 +113,7 @@ body.test-page .topbar{
   background: rgba(255,255,255,0.86);
   border-bottom: 1px solid rgba(17,24,39,0.10);
 }
-body.test-page .topbar-inner{ max-width: 1180px; }
+body.test-page .topbar-inner{ max-width: 1320px; }
 body.test-page .topbar-inner .badge{
   background:#fff;
   border:1px solid rgba(17,24,39,0.10);
