@@ -446,11 +446,19 @@ async function runCandidateFlow({
   const listeningEveryMs = Math.max(2000, Math.floor(Number(listeningIntervalSec || 20) * 1000));
 
   function record(endpoint, result) {
-    const bucket = metrics.endpoints[endpoint] || { times: [], statuses: new Map(), fail: 0, total: 0 };
+    const bucket = metrics.endpoints[endpoint] || { times: [], statuses: new Map(), fail: 0, total: 0, errorSamples: new Map() };
     bucket.total += 1;
     bucket.times.push(result.ms);
     bucket.statuses.set(result.status, (bucket.statuses.get(result.status) || 0) + 1);
-    if (!result.ok) bucket.fail += 1;
+    if (!result.ok) {
+      bucket.fail += 1;
+      const j = result && result.json && typeof result.json === "object" ? result.json : null;
+      const err = j && j.error ? String(j.error).trim() : "";
+      const msg = j && j.message ? String(j.message).trim() : "";
+      const raw = result && result.error ? String(result.error).trim() : "";
+      const sample = (msg ? `${err || "error"}: ${msg}` : (err || raw || `http_${result.status || "error"}`)).slice(0, 220);
+      if (sample) bucket.errorSamples.set(sample, (bucket.errorSamples.get(sample) || 0) + 1);
+    }
     metrics.endpoints[endpoint] = bucket;
   }
 
@@ -551,6 +559,23 @@ async function runCandidateFlow({
   const submitStartMs = answerEndMs;
   const submitEndMs = submitStartMs + submitWindowMs;
 
+  const snapshotPlanElapsedMs = [];
+  if (withSnapshots && snapshotCount > 0) {
+    if (realisticFlow) {
+      const snapFrom = Math.max(0, answerStartMs);
+      const snapTo = Math.max(snapFrom + 1, answerEndMs);
+      for (let i = 0; i < snapshotCount; i += 1) {
+        snapshotPlanElapsedMs.push(randomInt(snapFrom, Math.max(snapFrom, snapTo - 1)));
+      }
+      snapshotPlanElapsedMs.sort((a, b) => a - b);
+    } else {
+      for (let i = 0; i < snapshotCount; i += 1) {
+        const frac = (i + 1) / (snapshotCount + 1);
+        snapshotPlanElapsedMs.push(Math.floor(frac * effectiveDurationMs));
+      }
+    }
+  }
+
   const plannedFirstListeningAt = realisticFlow
     ? (nowStart + randomInt(playStartMs, Math.max(playStartMs, playEndMs - 1)))
     : nowStart;
@@ -609,8 +634,8 @@ async function runCandidateFlow({
     }
 
     if (withSnapshots && snapshotsDone < snapshotCount && !snapshotLimited) {
-      const targetAt = simEndAt - Math.floor(((snapshotCount - snapshotsDone) / (snapshotCount + 1)) * effectiveDurationMs);
-      if (now >= targetAt) {
+      const targetElapsed = Number(snapshotPlanElapsedMs[snapshotsDone]);
+      if (Number.isFinite(targetElapsed) && elapsedMs >= targetElapsed) {
         const s = await doSnapshotAction(snapshotsDone);
         if (!s.ok) return { ok: false, token, reason: s.reason || "snapshot_failed" };
         snapshotsDone += 1;
@@ -689,6 +714,14 @@ function printEndpointStats(metrics) {
     console.log(`- ${name}`);
     console.log(`  calls=${b.total} fail=${b.fail} failRate=${failRate}% p50=${p50}ms p95=${p95}ms max=${max}ms`);
     console.log(`  statuses: ${statusLine || "(none)"}`);
+    if (b.fail > 0) {
+      const errorLine = [...(b.errorSamples || new Map()).entries()]
+        .sort((a, b2) => Number(b2[1]) - Number(a[1]))
+        .slice(0, 2)
+        .map(([sample, n]) => `${n}x ${sample}`)
+        .join(" | ");
+      if (errorLine) console.log(`  errors: ${errorLine}`);
+    }
   }
 }
 
@@ -705,6 +738,10 @@ function endpointStatsObject(metrics) {
       p95Ms: percentile(b.times || [], 95),
       maxMs: Math.max(0, ...((b.times || []).map((x) => Number(x) || 0))),
       statuses: Object.fromEntries([...(b.statuses || new Map()).entries()].map(([k, v]) => [String(k), Number(v || 0)])),
+      errorSamples: [...(b.errorSamples || new Map()).entries()]
+        .sort((a, b2) => Number(b2[1]) - Number(a[1]))
+        .slice(0, 5)
+        .map(([sample, count]) => ({ sample, count: Number(count || 0) })),
     };
   }
   return out;

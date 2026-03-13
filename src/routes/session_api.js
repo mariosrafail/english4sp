@@ -36,6 +36,68 @@ module.exports = function registerSessionRoutes(app, ctx) {
     throw new Error("session_routes_missing_ctx");
   }
 
+  function parseBoolEnv(name, defaultValue) {
+    const raw = process.env[name];
+    if (raw === undefined || raw === null || String(raw).trim() === "") return !!defaultValue;
+    const v = String(raw).trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(v)) return true;
+    if (["0", "false", "no", "n", "off"].includes(v)) return false;
+    return !!defaultValue;
+  }
+
+  function isNoSpaceError(err) {
+    const code = String(err?.code || "").trim().toUpperCase();
+    const msg = String(err?.message || err || "").toLowerCase();
+    return code === "ENOSPC" || msg.includes("no space left on device");
+  }
+
+  async function reclaimSnapshotStorage({ skipSnapshotId } = {}) {
+    if (!parseBoolEnv("SNAPSHOT_PRUNE_ON_ENOSPC", true)) {
+      return { attempted: false, deleted: 0, considered: 0 };
+    }
+    if (!DB.listSessionSnapshots || !DB.deleteSessionSnapshotById) {
+      return { attempted: false, deleted: 0, considered: 0 };
+    }
+
+    const batchRaw = Number(process.env.SNAPSHOT_ENOSPC_PRUNE_BATCH || "150");
+    const batch = Number.isFinite(batchRaw) && batchRaw > 0 ? Math.min(1000, Math.floor(batchRaw)) : 150;
+    const rows = await DB.listSessionSnapshots({ limit: Math.max(batch * 4, 300) });
+    const list = Array.isArray(rows) ? rows : [];
+    const skipId = Number(skipSnapshotId || 0);
+
+    const candidates = list
+      .filter((r) => Number.isFinite(Number(r?.id || 0)) && Number(r.id) > 0 && Number(r.id) !== skipId)
+      .sort((a, b) => {
+        const ta = Number(a?.createdAtUtcMs || 0);
+        const tb = Number(b?.createdAtUtcMs || 0);
+        if (ta !== tb) return ta - tb;
+        return Number(a?.id || 0) - Number(b?.id || 0);
+      })
+      .slice(0, batch);
+
+    let deleted = 0;
+    for (const row of candidates) {
+      const sid = Number(row?.id || 0);
+      if (!Number.isFinite(sid) || sid <= 0) continue;
+
+      const remotePath = String(row?.remotePath || "").trim();
+      if (remotePath) {
+        try {
+          await Storage.deleteFile(remotePath);
+        } catch (e) {
+          if (isNoSpaceError(e)) break;
+        }
+      }
+
+      try {
+        const ok = await DB.deleteSessionSnapshotById(sid);
+        if (ok) deleted += 1;
+      } catch {}
+    }
+
+    return { attempted: true, deleted, considered: candidates.length };
+  }
+
   // Public speaking gate endpoint (token-based countdown -> redirect URL).
   app.get("/api/speaking/:token", async (req, res) => {
     await ensureInit();
@@ -168,14 +230,42 @@ module.exports = function registerSessionRoutes(app, ctx) {
         return res.status(429).json({ error: "snapshot_limit_reached", count: meta.count, remaining: meta.remaining });
       }
 
+      let writeErr = null;
       try {
         await Storage.writeFile(remotePath, buf);
       } catch (e) {
+        writeErr = e;
+      }
+
+      let reclaimed = 0;
+      if (writeErr && isNoSpaceError(writeErr)) {
+        const reclaim = await reclaimSnapshotStorage({ skipSnapshotId: meta.snapshotId });
+        reclaimed = Number(reclaim?.deleted || 0);
+        if (reclaimed > 0) {
+          try {
+            await Storage.writeFile(remotePath, buf);
+            writeErr = null;
+            console.warn("snapshot_storage_recovered", { token: t, reclaimed });
+          } catch (e2) {
+            writeErr = e2;
+          }
+        }
+      }
+
+      if (writeErr) {
         // Best-effort rollback if the file write fails.
         try {
           if (DB.deleteSessionSnapshotById && meta.snapshotId) await DB.deleteSessionSnapshotById(Number(meta.snapshotId));
         } catch {}
-        throw e;
+
+        if (isNoSpaceError(writeErr)) {
+          return res.status(507).json({
+            error: "snapshot_storage_full",
+            message: String(writeErr?.message || writeErr),
+            reclaimed,
+          });
+        }
+        throw writeErr;
       }
 
       console.log("snapshot_stored", { token: t, reason, remotePath, count: meta.count });

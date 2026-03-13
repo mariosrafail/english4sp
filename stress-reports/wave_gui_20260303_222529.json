@@ -1,0 +1,146 @@
+{
+  "generatedAtUtc": "2026-03-03T21:13:20.547Z",
+  "config": {
+    "baseUrl": "https://english4sp.stinis.ddns.net",
+    "linksFile": "C:/Users/Marios/Desktop/sessions_examperiod_2 (2).xlsx",
+    "tokens": 50,
+    "concurrency": 50,
+    "withPresence": true,
+    "withListening": true,
+    "withSnapshots": true,
+    "realisticFlow": true,
+    "snapshotCount": 2,
+    "snapshotSizeKb": 900,
+    "durationMinutes": 60,
+    "presenceIntervalSec": 25,
+    "listeningIntervalSec": 20,
+    "listeningChunkKb": 512,
+    "listeningActions": 1,
+    "playStartMinute": 0,
+    "playEndMinute": 5,
+    "audioWaitMinutes": 5,
+    "answerPhaseMinutes": 40,
+    "submitWindowMinutes": 10,
+    "timeoutMs": 30000,
+    "failRateThreshold": 1,
+    "strictExamLinks": true
+  },
+  "summary": {
+    "total": 50,
+    "ok": 0,
+    "skipped": 0,
+    "failed": 50,
+    "failRate": 1,
+    "elapsedSec": 2784.5320265
+  },
+  "failureReasons": {
+    "snapshot_500": 50
+  },
+  "endpoints": {
+    "GET /api/session/:token": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 2727.8651999999997,
+      "p95Ms": 3028.4891,
+      "maxMs": 3031.2266,
+      "statuses": {
+        "200": 50
+      },
+      "errorSamples": []
+    },
+    "POST /api/session/:token/proctoring-ack": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 2062.0750000000003,
+      "p95Ms": 2105.9075000000003,
+      "maxMs": 2151.7920999999997,
+      "statuses": {
+        "200": 50
+      },
+      "errorSamples": []
+    },
+    "POST /api/session/:token/start": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 2060.1215,
+      "p95Ms": 2100.1697999999997,
+      "maxMs": 2121.0470000000005,
+      "statuses": {
+        "200": 50
+      },
+      "errorSamples": []
+    },
+    "POST /api/session/:token/presence": {
+      "calls": 3087,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 141.6101000001654,
+      "p95Ms": 220.06319999997504,
+      "maxMs": 1963.372699999949,
+      "statuses": {
+        "200": 3087
+      },
+      "errorSamples": []
+    },
+    "POST /api/session/:token/listening-ticket": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 1093.436299999972,
+      "p95Ms": 1116.9184000000241,
+      "maxMs": 1140.5099000000046,
+      "statuses": {
+        "200": 50
+      },
+      "errorSamples": []
+    },
+    "GET /api/session/:token/listening-audio": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 279.6045999999915,
+      "p95Ms": 293.05910000001313,
+      "maxMs": 298.8048000000126,
+      "statuses": {
+        "206": 50
+      },
+      "errorSamples": []
+    },
+    "POST /api/session/:token/snapshot": {
+      "calls": 50,
+      "fail": 50,
+      "failRate": 1,
+      "p50Ms": 1191.2330000000075,
+      "p95Ms": 2114.5849999999627,
+      "maxMs": 2202.667699999991,
+      "statuses": {
+        "500": 50
+      },
+      "errorSamples": [
+        {
+          "sample": "snapshot_upload_failed: ENOSPC: no space left on device, write",
+          "count": 1
+        },
+        {
+          "sample": "snapshot_upload_failed: ENOSPC: no space left on device, mkdir '/app/storage/snapshots/ep_2/JIZHQ0F39D'",
+          "count": 1
+        },
+        {
+          "sample": "snapshot_upload_failed: ENOSPC: no space left on device, mkdir '/app/storage/snapshots/ep_2/V5YSTEHT4N'",
+          "count": 1
+        },
+        {
+          "sample": "snapshot_upload_failed: ENOSPC: no space left on device, mkdir '/app/storage/snapshots/ep_2/3L6NI8KEAW'",
+          "count": 1
+        },
+        {
+          "sample": "snapshot_upload_failed: ENOSPC: no space left on device, mkdir '/app/storage/snapshots/ep_2/2SL3A7NQE0'",
+          "count": 1
+        }
+      ]
+    }
+  }
+}

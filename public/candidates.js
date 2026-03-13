@@ -264,7 +264,7 @@ function scheduleApply() {
       isApplying = true;
       applyFilters(false);
     } catch (e) {
-      elTbody.innerHTML = `<tr><td colspan="9" class="bad">Search error: ${escapeHtml(e?.message || String(e))}</td></tr>`;
+      elTbody.innerHTML = `<tr><td colspan="10" class="bad">Search error: ${escapeHtml(e?.message || String(e))}</td></tr>`;
     } finally {
       isApplying = false;
       if (pendingApply) {
@@ -303,7 +303,8 @@ function applyFilters(resetPage = true) {
       const sidPad = sid.padStart(6, "0");
       const idLabel = `s-${sidPad}`;
       const period = normalize(getPeriodName(r.examPeriodId));
-      const hay = `${name} ${token} ${sid} ${sidPad} ${idLabel} s${sidPad} ${period}`;
+      const email = normalize(r.email || "");
+      const hay = `${name} ${email} ${token} ${sid} ${sidPad} ${idLabel} s${sidPad} ${period}`;
       if (hay.includes(q)) return true;
       if (!qKey) return false;
       const hayKey = hay.replace(/[^a-z0-9]/g, "");
@@ -326,7 +327,7 @@ function render() {
 
   const slice = getCurrentSlice();
   if (!slice.length) {
-    elTbody.innerHTML = `<tr><td colspan="9" class="muted">No results</td></tr>`;
+    elTbody.innerHTML = `<tr><td colspan="10" class="muted">No results</td></tr>`;
   } else {
     elTbody.innerHTML = slice.map((r) => {
       const id = Number(r.sessionId || 0);
@@ -342,6 +343,7 @@ function render() {
           <td><input type="checkbox" data-role="pick" data-sid="${id}" ${checked} /></td>
           <td><span class="pill mono">${escapeHtml(idLabel)}</span></td>
           <td>${nameCell}</td>
+          <td><span class="mono">${escapeHtml(String(r.email || "-"))}</span></td>
           <td><span class="mono">${escapeHtml(getPeriodName(r.examPeriodId))}</span></td>
           <td><span class="mono">${escapeHtml(String(r.assignedExaminer || "-"))}</span></td>
           <td><span class="mono">${escapeHtml(r.token || "")}</span></td>
@@ -377,6 +379,7 @@ async function exportRows(rows, scopeLabel, includeDetailed = false) {
       examPeriodName: getPeriodName(r.examPeriodId),
       candidateCode: `S-${String(sid).padStart(6, "0")}`,
       candidateName: r.candidateName || "",
+      email: r.email || "",
       token: r.token || "",
       submitted: !!r.submitted,
       totalGrade: r.totalGrade ?? "",
@@ -410,7 +413,7 @@ async function exportRows(rows, scopeLabel, includeDetailed = false) {
 }
 
 async function load() {
-  elTbody.innerHTML = `<tr><td colspan="8" class="muted">Loading...</td></tr>`;
+  elTbody.innerHTML = `<tr><td colspan="10" class="muted">Loading...</td></tr>`;
   loadPageSize();
   applyTableWrapSizing();
   const [rows, periods] = await Promise.all([

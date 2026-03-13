@@ -427,6 +427,7 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
   });
 
   async function deleteSnapshotFilesBySessionId(sessionId) {
+    const fs = require("fs");
     const sid = Number(sessionId);
     if (!Number.isFinite(sid) || sid <= 0) return { ok: false, deleted: 0, errors: [{ error: "invalid_session_id" }] };
     if (typeof DB.listSessionSnapshots !== "function") return { ok: true, deleted: 0, errors: [] };
@@ -447,6 +448,16 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
     );
     if (!paths.length) return { ok: true, deleted: 0, errors: [] };
 
+    const dirsToTry = Array.from(
+      new Set(
+        paths
+          .map((p) => String(p || "").trim().replace(/\\/g, "/"))
+          .map((p) => p.split("/").slice(0, -1).join("/"))
+          .filter(Boolean)
+      )
+    )
+      .sort((a, b) => b.length - a.length);
+
     const settled = await Promise.allSettled(paths.map((p) => Storage.deleteFile(p)));
     let deleted = 0;
     const errors = [];
@@ -459,7 +470,63 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
         errors.push({ path: p, error: String(r.reason?.message || r.reason || "delete_failed") });
       }
     }
+
+    for (const relDir of dirsToTry) {
+      try {
+        if (typeof Storage.resolvePath !== "function") break;
+        const resolved = Storage.resolvePath(relDir);
+        const absDir = String(resolved?.abs || "");
+        const baseDir = String(resolved?.base || "");
+        if (!absDir || !baseDir) continue;
+        if (!absDir.startsWith(baseDir)) continue;
+        const entries = await fs.promises.readdir(absDir).catch((e) => {
+          if (e && e.code === "ENOENT") return null;
+          throw e;
+        });
+        if (entries === null) continue;
+        if (entries.length > 0) continue;
+        await fs.promises.rmdir(absDir).catch((e) => {
+          if (e && (e.code === "ENOENT" || e.code === "ENOTEMPTY")) return;
+          throw e;
+        });
+      } catch (e) {
+        errors.push({ path: relDir, error: String(e?.message || "delete_empty_dir_failed") });
+      }
+    }
+
     return { ok: errors.length === 0, deleted, errors };
+  }
+
+  async function deleteAllSnapshotFilesFromStorage() {
+    const fs = require("fs");
+    const path = require("path");
+
+    let abs = "";
+    try {
+      if (typeof Storage.resolvePath === "function") {
+        const p = Storage.resolvePath("snapshots");
+        abs = String(p?.abs || "");
+      }
+    } catch {}
+
+    if (!abs) {
+      try {
+        if (typeof Storage.storageBaseDir === "function") {
+          abs = path.join(Storage.storageBaseDir(), "snapshots");
+        }
+      } catch {}
+    }
+
+    if (!abs) {
+      return { ok: false, path: "", deleted: false, error: "snapshot_storage_path_unavailable" };
+    }
+
+    try {
+      fs.rmSync(abs, { recursive: true, force: true });
+      return { ok: true, path: abs, deleted: true };
+    } catch (e) {
+      return { ok: false, path: abs, deleted: false, error: String(e?.message || "snapshot_storage_delete_failed") };
+    }
   }
 
   app.post("/api/admin/import-excel", upload.single("file"), async (req, res) => {
@@ -799,6 +866,7 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
         examPeriod: String(r.examPeriodName || ""),
         candidateCode: String(r.candidateCode || ""),
         name: String(r.candidateName || ""),
+        email: String(r.email || ""),
         token: String(r.token || ""),
         submitted: r.submitted ? "YES" : "NO",
         grade: r.totalGrade ?? "",
@@ -854,6 +922,7 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
           { header: "Exam Period", key: "examPeriod" },
           { header: "Candidate Code", key: "candidateCode" },
           { header: "Name", key: "name" },
+          { header: "Email", key: "email" },
           { header: "Token", key: "token" },
           { header: "Submitted", key: "submitted" },
           { header: "Grade", key: "grade" },
@@ -870,6 +939,7 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
           { header: "Exam Period", key: "examPeriod" },
           { header: "Candidate Code", key: "candidateCode" },
           { header: "Name", key: "name" },
+          { header: "Email", key: "email" },
           { header: "Token", key: "token" },
           { header: "Submitted", key: "submitted" },
           { header: "Grade", key: "grade" },
@@ -934,8 +1004,9 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
     const a = await adminAuth(req, res);
     if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
 
+    const snapshotStorage = await deleteAllSnapshotFilesFromStorage();
     await DB.deleteAllCoreData();
-    res.json({ ok: true });
+    res.json({ ok: true, snapshotStorage });
   });
 
   app.post("/api/admin/candidates/bulk-delete", async (req, res) => {

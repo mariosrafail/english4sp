@@ -1,0 +1,127 @@
+{
+  "generatedAtUtc": "2026-03-03T15:13:34.560Z",
+  "config": {
+    "baseUrl": "https://english4sp.stinis.ddns.net",
+    "linksFile": "C:/Users/Marios/Desktop/sessions_examperiod_2.xlsx",
+    "tokens": 114,
+    "concurrency": 114,
+    "withPresence": true,
+    "withListening": true,
+    "withSnapshots": true,
+    "realisticFlow": true,
+    "snapshotCount": 6,
+    "snapshotSizeKb": 900,
+    "durationMinutes": 13,
+    "presenceIntervalSec": 25,
+    "listeningIntervalSec": 20,
+    "listeningChunkKb": 512,
+    "listeningActions": 1,
+    "playStartMinute": 1,
+    "playEndMinute": 2,
+    "audioWaitMinutes": 5,
+    "answerPhaseMinutes": 4,
+    "submitWindowMinutes": 2,
+    "timeoutMs": 30000,
+    "failRateThreshold": 1,
+    "strictExamLinks": true
+  },
+  "summary": {
+    "total": 114,
+    "ok": 114,
+    "skipped": 0,
+    "failed": 0,
+    "failRate": 0,
+    "elapsedSec": 793.5922723000001
+  },
+  "failureReasons": {},
+  "endpoints": {
+    "GET /api/session/:token": {
+      "calls": 114,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 4640.954000000001,
+      "p95Ms": 5396.899200000001,
+      "maxMs": 5490.0878999999995,
+      "statuses": {
+        "200": 114
+      }
+    },
+    "POST /api/session/:token/proctoring-ack": {
+      "calls": 114,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 4694.241000000001,
+      "p95Ms": 4738.2456999999995,
+      "maxMs": 4757.2541,
+      "statuses": {
+        "200": 114
+      }
+    },
+    "POST /api/session/:token/start": {
+      "calls": 114,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 4691.082900000001,
+      "p95Ms": 4744.891299999999,
+      "maxMs": 4774.281599999998,
+      "statuses": {
+        "200": 114
+      }
+    },
+    "POST /api/session/:token/presence": {
+      "calls": 3085,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 143.08850000007078,
+      "p95Ms": 2974.752899999963,
+      "maxMs": 5935.733899999992,
+      "statuses": {
+        "200": 3085
+      }
+    },
+    "POST /api/session/:token/listening-ticket": {
+      "calls": 114,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 1127.4523999999947,
+      "p95Ms": 8330.36559999999,
+      "maxMs": 10398.300900000002,
+      "statuses": {
+        "200": 114
+      }
+    },
+    "GET /api/session/:token/listening-audio": {
+      "calls": 114,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 286.2537000000011,
+      "p95Ms": 948.3389999999781,
+      "maxMs": 5125.582200000004,
+      "statuses": {
+        "206": 114
+      }
+    },
+    "POST /api/session/:token/snapshot": {
+      "calls": 677,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 14116.160900000017,
+      "p95Ms": 18812.109499999962,
+      "maxMs": 20018.536599999992,
+      "statuses": {
+        "200": 677
+      }
+    },
+    "POST /api/session/:token/submit": {
+      "calls": 114,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 843.9759999999078,
+      "p95Ms": 8358.911600000109,
+      "maxMs": 9350.282299999963,
+      "statuses": {
+        "200": 114
+      }
+    }
+  }
+}

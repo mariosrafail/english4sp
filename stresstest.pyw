@@ -213,17 +213,17 @@ class StressTestApp:
         self.base_url.set("https://english4sp.stinis.ddns.net")
         self.links_file.set("")
         self.concurrency.set("114")
-        self.duration_minutes.set("13")
+        self.duration_minutes.set("60")
         self.snapshot_size_kb.set("900")
         self.snapshot_count.set("2")
         self.presence_interval_sec.set("25")
         self.listening_interval_sec.set("20")
         self.listening_actions.set("1")
-        self.play_start_minute.set("1")
-        self.play_end_minute.set("2")
+        self.play_start_minute.set("0")
+        self.play_end_minute.set("5")
         self.audio_wait_minutes.set("5")
-        self.answer_phase_minutes.set("4")
-        self.submit_window_minutes.set("2")
+        self.answer_phase_minutes.set("40")
+        self.submit_window_minutes.set("10")
         self.listening_chunk_kb.set("512")
         self.timeout_ms.set("30000")
         self.ping_interval_sec.set("5")
@@ -597,7 +597,6 @@ class StressTestApp:
 
         self._set_running(True)
         self.status.set("Running...")
-        self._start_progress()
         self.ping_text.set("Ping: starting...")
 
         try:
@@ -617,6 +616,8 @@ class StressTestApp:
             self.status.set("Failed to start")
             messagebox.showerror("Run failed", str(e))
             return
+
+        self._start_progress()
 
         self.reader_thread = threading.Thread(target=self._reader_loop, daemon=True)
         self.reader_thread.start()

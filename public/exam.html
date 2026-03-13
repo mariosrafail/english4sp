@@ -1,114 +1,152 @@
 ﻿<!doctype html>
-<html lang="en">
+<html lang="en" translate="no" class="notranslate">
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta http-equiv="Content-Language" content="en"/>
+  <meta name="google" content="notranslate"/>
   <title>Tourism Certification Test</title>
   <link rel="stylesheet" href="/styles.css"/>
   <link rel="icon" href="/favicon.ico"/>
 </head>
-<body class="test-page">
+<body class="test-page notranslate" translate="no">
   <div class="topbar">
     <div class="topbar-inner">
-      <div class="badge"><span>English Exam</span><span id="candidate" class="mono"></span></div>
-      <div class="badge"><span class="small">Time left</span><span id="timer" class="timer mono">00:00</span></div>
+      <div class="topbar-side topbar-side--left">
+        <div class="badge topbar-badge candidate-badge">
+          <span class="topbar-label">Candidate</span>
+          <span id="candidate" class="mono topbar-value"></span>
+        </div>
+      </div>
+      <div class="topbar-side topbar-side--right">
+        <div class="badge topbar-badge timer-badge">
+          <span class="topbar-label">Time left</span>
+          <span id="timer" class="timer mono topbar-value">00:00</span>
+        </div>
+      </div>
     </div>
   </div>
 
   <div class="wrap">
     <div id="main" class="card">
-      <h1 id="title">Loading...</h1>
-      <div class="small" id="examFlowText" style="margin: 8px 0 10px 0;">
-        Test flow: Part 1 Listening, then Part 2 Reading, then Part 3 Writing.
+      <div class="examHero">
+        <div class="examHeroMain">
+          <h1 id="title">Loading...</h1>
+          <div class="small examFlowText" id="examFlowText">
+            Test flow: Part 1 Listening, then Part 2 Reading, then Part 3 Writing.
+          </div>
+        </div>
+        <div class="examHeroAside">
+          <div class="notice examIntroNotice" id="examDisplayNotice">
+            Use one display only. If you have a second monitor connected, disconnect or disable it before starting the exam.
+          </div>
+        </div>
       </div>
       <div id="status" class="notice" style="display:none"></div>
 
       <div id="gate" style="display:none">
-        <div class="hr"></div>
-        <h2>Remote proctoring notice</h2>
-        <div class="notice" id="proctoringNoticeText">
-          During this exam, your device camera will be used for invigilation and identity verification (human review).
-        </div>
-        <div class="small muted" id="proctoringMeta" style="margin-top:10px">
-          <span id="proctoringController"></span>
-          <span id="proctoringRetention"></span>
-          <a id="proctoringPrivacyLink" href="#" target="_blank" rel="noopener">Exam Proctoring Privacy Notice</a>
-        </div>
-        <div class="proctoringActions" style="margin-top:10px">
-          <button id="proctoringReadMore" type="button">Read here</button>
-        </div>
-        <div id="proctoringLongNotice" class="proctoringLong" style="display:none">
-          <h3 style="margin:0 0 8px 0">Exam Proctoring Privacy Notice</h3>
-          <div class="small">
-            <p><b>Controller</b>: <span id="proctoringControllerLong">[Educational organization]</span></p>
-            <p><b>Purpose</b>: To protect exam integrity, verify identity (human review), investigate suspected misconduct, and resolve disputes.</p>
-            <p><b>Data we collect</b>: Live camera stream for presence checks, periodic still images (if enabled), timestamps, exam session logs, and limited device/browser metadata (e.g., IP address and user agent).</p>
-            <p><b>Who can access</b>: Only authorized exam staff and our proctoring service provider acting on the controller’s instructions.</p>
-            <p><b>Retention</b>: Up to <span id="proctoringRetentionLong">[X]</span> days, then deletion/anonymization.</p>
-            <p><b>Legal basis</b>: The controller determines the legal basis (commonly legitimate interests and/or performance of a contract, depending on the exam rules).</p>
-            <p><b>Your rights</b>: You may have the right to access, erasure, restriction, objection, and portability, depending on your jurisdiction. Requests are handled by the controller.</p>
-            <p><b>Contact</b>: Please contact your educational organization for privacy requests or alternative arrangements (if available).</p>
-          </div>
-        </div>
-        <div style="margin-top:10px">
-          <label class="ackLabel" for="proctoringAck" id="proctoringAckLabel">
-            <input type="checkbox" id="proctoringAck"/>
-            <span>I have read and understood the Remote Proctoring Notice and the Exam Proctoring Privacy Notice.</span>
-          </label>
-        </div>
-
-        <div class="hr"></div>
-        <h2>Camera check</h2>
-        <p id="cameraCheckText">Camera access is required to start the exam. The system checks that your face is visible.</p>
-
-        <div class="videoWrap">
-          <div class="videoCard">
-            <div class="faceBox">
-              <video id="video" playsinline autoplay muted></video>
-              <div id="faceOverlay" class="faceOverlay"></div>
+        <div class="gateShell">
+          <section class="gatePanel gatePanel--notice">
+            <div class="gatePanelHeader">
+              <h2>Remote proctoring notice</h2>
             </div>
-            <div class="small" id="faceHint" style="margin-top:10px">Waiting for camera permission...</div>
-          </div>
-
-          <div class="videoCard">
-            <div class="notice" id="gateNotice">Click "Enable camera" and keep your face visible.</div>
-            <div class="small" style="margin-top:10px">
-              Requirements:
-              <ul>
-                <li>Camera permission granted</li>
-                <li>Face detected for 2 seconds</li>
-                <li id="reqFullscreen">Fullscreen enabled</li>
-              </ul>
+            <div class="notice" id="proctoringNoticeText">
+              During this exam, your device camera will be used for invigilation and identity verification (human review).
             </div>
-
-            <div class="row" style="margin-top:10px">
-              <div class="col">
-                <label class="small" for="camSelect">Camera device</label>
-                <select id="camSelect" title="Choose camera">
-                  <option value="">Default camera</option>
-                </select>
+            <div class="small muted proctoringMetaLine" id="proctoringMeta">
+              <span id="proctoringController"></span>
+              <span id="proctoringRetention"></span>
+              <a id="proctoringPrivacyLink" href="#" target="_blank" rel="noopener">Exam Proctoring Privacy Notice</a>
+            </div>
+            <div class="proctoringActions gateActionRow">
+              <button id="proctoringReadMore" type="button">Read here</button>
+            </div>
+            <div id="proctoringLongNotice" class="proctoringLong" style="display:none">
+              <h3 style="margin:0 0 8px 0">Exam Proctoring Privacy Notice</h3>
+              <div class="small">
+                <p><b>Controller</b>: <span id="proctoringControllerLong">[Educational organization]</span></p>
+                <p><b>Purpose</b>: To protect exam integrity, verify identity (human review), investigate suspected misconduct, and resolve disputes.</p>
+                <p><b>Data we collect</b>: Live camera stream for presence checks, periodic still images (if enabled), timestamps, exam session logs, and limited device/browser metadata (e.g., IP address and user agent).</p>
+                <p><b>Who can access</b>: Only authorized exam staff and our proctoring service provider acting on the controller’s instructions.</p>
+                <p><b>Retention</b>: Up to <span id="proctoringRetentionLong">[X]</span> days, then deletion/anonymization.</p>
+                <p><b>Legal basis</b>: The controller determines the legal basis (commonly legitimate interests and/or performance of a contract, depending on the exam rules).</p>
+                <p><b>Your rights</b>: You may have the right to access, erasure, restriction, objection, and portability, depending on your jurisdiction. Requests are handled by the controller.</p>
+                <p><b>Contact</b>: Please contact your educational organization for privacy requests or alternative arrangements (if available).</p>
               </div>
-              <div class="col" style="max-width:180px; display:flex; align-items:flex-end;">
-                <button id="refreshCams" class="primary" type="button">Refresh cameras</button>
+            </div>
+            <div class="gateAckRow">
+              <label class="ackLabel" for="proctoringAck" id="proctoringAckLabel">
+                <input type="checkbox" id="proctoringAck"/>
+                <span>I have read and understood the Remote Proctoring Notice and the Exam Proctoring Privacy Notice.</span>
+              </label>
+            </div>
+          </section>
+
+          <section class="gatePanel gatePanel--camera">
+            <div class="gatePanelHeader">
+              <div>
+                <h2>Camera check</h2>
+                <p id="cameraCheckText">Camera access is required to start the exam. The system checks that your face is visible.</p>
+              </div>
+              <div class="gateSoundRow">
+                <button id="testSound" class="primary" type="button">Test sound</button>
+                <div id="testSoundStatus" class="small muted">Use Test sound to verify that your speakers or headphones work before starting.</div>
               </div>
             </div>
 
-            <div class="row" style="margin-top:12px">
-              <div class="col">
-                <button id="enableCam" class="primary">Enable camera</button>
+            <div class="videoWrap gateVideoWrap">
+              <div class="videoCard videoCard--preview">
+                <div class="faceBox">
+                  <video id="video" playsinline autoplay muted disablePictureInPicture controlslist="nofullscreen noremoteplayback nodownload" disableRemotePlayback></video>
+                  <div id="faceOverlay" class="faceOverlay"></div>
+                </div>
+                <div class="small faceHintText" id="faceHint">Waiting for camera permission...</div>
               </div>
-              <div class="col">
-                <button id="goFullscreen" class="primary" type="button">Enter fullscreen mode</button>
-              </div>
-              <div class="col">
-                <button id="startExam" class="primary" disabled>Start exam</button>
+
+              <div class="videoCard videoCard--controls">
+                <div class="notice" id="gateNotice">Click "Enable camera" and keep your face visible.</div>
+                <div class="gateRequirements">
+                  <div class="small gateRequirementsTitle">Requirements</div>
+                  <ul class="gateRequirementsList">
+                    <li>Camera permission granted</li>
+                    <li>Face detected for 2 seconds</li>
+                    <li id="reqFullscreen">Fullscreen enabled</li>
+                    <li>Translation tools/extensions disabled</li>
+                  </ul>
+                </div>
+
+                <div class="gateDeviceGrid row">
+                  <div class="col">
+                    <label class="small" for="camSelect">Camera device</label>
+                    <select id="camSelect" title="Choose camera">
+                      <option value="">Default camera</option>
+                    </select>
+                  </div>
+                  <div class="col">
+                    <label class="small" for="speakerSelect">Speaker / output device</label>
+                    <select id="speakerSelect" title="Choose speaker">
+                      <option value="">Default output</option>
+                    </select>
+                  </div>
+                  <div class="col gateRefreshCol">
+                    <button id="refreshCams" class="primary" type="button">Refresh cameras</button>
+                  </div>
+                </div>
+
+                <div class="gateButtonRow row">
+                  <div class="col">
+                    <button id="enableCam" class="primary">Enable camera</button>
+                  </div>
+                  <div class="col">
+                    <button id="goFullscreen" class="primary" type="button">Enter fullscreen mode</button>
+                  </div>
+                  <div class="col">
+                    <button id="startExam" class="primary" disabled>Start exam</button>
+                  </div>
+                </div>
               </div>
             </div>
-
-            <!-- <div class="small" style="margin-top:10px">
-              Face detection runs locally. If the browser does not support the built-in detector, a lightweight fallback is loaded.
-            </div> -->
-          </div>
+          </section>
         </div>
       </div>
 
@@ -126,7 +164,7 @@
       <div class="camMiniStatus"><span id="camMiniDot" class="dot" aria-hidden="true"></span><span id="camMiniText">Starting...</span></div>
     </div>
     <div class="camMiniBody">
-      <video id="videoMini" playsinline autoplay muted></video>
+      <video id="videoMini" playsinline autoplay muted disablePictureInPicture controlslist="nofullscreen noremoteplayback nodownload" disableRemotePlayback></video>
     </div>
   </div>
 

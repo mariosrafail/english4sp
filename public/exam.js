@@ -1,4 +1,5 @@
-import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
+import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs, uiConfirm } from "/app.js";
+import { hardenNoTranslateTree, registerCanvasTextBlock, clearCanvasTextBlocks, queueCanvasTextRender, installCanvasTextAutoResize } from "/exam-text-canvas.js";
 
   const params = new URLSearchParams(location.search);
   const token = (params.get("token") || "").trim();
@@ -13,13 +14,16 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
   const elGate = qs("#gate");
   const elEnableCam = qs("#enableCam");
+  const elTestSound = qs("#testSound");
   const elGoFullscreen = qs("#goFullscreen");
   const elStartExam = qs("#startExam");
   const elGateNotice = qs("#gateNotice");
+  const elTestSoundStatus = qs("#testSoundStatus");
   const elVideo = qs("#video");
   const elFaceOverlay = qs("#faceOverlay");
   const elFaceHint = qs("#faceHint");
   const elCamSelect = qs("#camSelect");
+  const elSpeakerSelect = qs("#speakerSelect");
   const elRefreshCams = qs("#refreshCams");
   const elCameraCheckText = qs("#cameraCheckText");
 
@@ -82,6 +86,35 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     elGateNotice.textContent = text;
     elGateNotice.className = "notice " + (cls || "");
   }
+  function showTestSoundStatus(text, cls){
+    if (!elTestSoundStatus) return;
+    elTestSoundStatus.textContent = text;
+    elTestSoundStatus.className = "small " + (cls || "muted");
+  }
+
+  let returnSnapshotTimer = null;
+  function clearReturnSnapshotTimer(){
+    if (!returnSnapshotTimer) return;
+    clearTimeout(returnSnapshotTimer);
+    returnSnapshotTimer = null;
+  }
+  function scheduleReturnSnapshot(reason, delayMs){
+    clearReturnSnapshotTimer();
+    returnSnapshotTimer = setTimeout(()=>{
+      returnSnapshotTimer = null;
+      if (!examStarted) return;
+      void captureAndUploadSnapshot(String(reason || "return_to_exam"));
+    }, Math.max(0, Number(delayMs || 1000)));
+  }
+
+  function hardenCameraVideoEl(videoEl){
+    if (!videoEl) return;
+    try { videoEl.disablePictureInPicture = true; } catch {}
+    try { videoEl.setAttribute("disablePictureInPicture", ""); } catch {}
+    try { videoEl.disableRemotePlayback = true; } catch {}
+    try { videoEl.setAttribute("disableRemotePlayback", ""); } catch {}
+    try { videoEl.setAttribute("controlslist", "nofullscreen noremoteplayback nodownload"); } catch {}
+  }
 
   function applyProctoringConfig(cfg) {
     const c = cfg && typeof cfg === "object" ? cfg : {};
@@ -140,7 +173,6 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
   function isProctoringAckSatisfied() {
     if (!proctoringAckRequired) return true;
-    if (proctoringAckedServer) return true;
     return !!(elProctoringAck && elProctoringAck.checked);
   }
 
@@ -150,7 +182,6 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     if (!elProctoringAck || !elProctoringAck.checked) throw new Error("Please acknowledge the Remote Proctoring Notice to start the exam.");
     await apiPost(`/api/session/${encodeURIComponent(token)}/proctoring-ack`, { noticeVersion: proctoringNoticeVersion });
     proctoringAckedServer = true;
-    try { elProctoringAck.disabled = true; } catch {}
   }
 
   function pickSnapshotVideoEl() {
@@ -178,14 +209,20 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   }
 
   async function buildAdaptiveSnapshotBlob(videoEl) {
-    const TARGET_MAX_BYTES = 850 * 1024;
-    const widths = [640, 560, 480, 420, 360, 320, 280, 240];
-    let last = null;
+    const COMPRESS_TRIGGER_BYTES = 1024 * 1024; // 1MB
+    const TARGET_BYTES = 900 * 1024; // ~900KB
+
+    const first = await makeSnapshotPngBlob(videoEl, 640);
+    if (!first) return null;
+    if (first.size <= COMPRESS_TRIGGER_BYTES) return first;
+
+    const widths = [560, 520, 480, 440, 400, 360, 320, 280, 240, 220, 200];
+    let last = first;
     for (const w of widths) {
       const blob = await makeSnapshotPngBlob(videoEl, w);
       if (!blob) continue;
       last = blob;
-      if (blob.size <= TARGET_MAX_BYTES) return blob;
+      if (blob.size <= TARGET_BYTES) return blob;
     }
     return last;
   }
@@ -332,6 +369,8 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   // Face violations must be scoped to the current attempt only.
   // Persisting across refreshes can cause premature disqualification.
   let faceViolations = 0;
+  let stopTranslationGuard = null;
+  let translationViolationTriggered = false;
   const MAX_TAB_VIOLATIONS = 3;
   const FACE_MISSING_AUTO_SUBMIT_MS = 10000;
   const FULLSCREEN_MISSING_AUTO_SUBMIT_MS = 10000;
@@ -368,6 +407,12 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     sectionViews.forEach((v, i)=>{
       v.el.style.display = i === clamped ? "block" : "none";
     });
+    try{
+      const current = sectionViews[clamped];
+      if (current && current.kind === "listening" && typeof current.autoStart === "function"){
+        current.autoStart();
+      }
+    } catch {}
     try { localStorage.setItem(LS_KEY("sectionIdx"), String(clamped)); } catch(e){}
     setSubmitVisibility();
     try { window.scrollTo(0, 0); } catch(e){}
@@ -400,19 +445,31 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   let faceOkSince = 0;
   let stopFaceLoop = null;
   let preferredCameraId = "";
+  let preferredSpeakerId = "";
   const PREF_CAM_KEY = "exam_preferred_camera";
+  const PREF_SPK_KEY = "exam_preferred_speaker";
+  let stopPreStartTranslationGuard = null;
 
   // Fullscreen requirement (block start until enabled)
   // Candidates can toggle fullscreen either via the Fullscreen API (Esc exits),
   // or via browser fullscreen (F11). The latter does not set document.fullscreenElement,
   // so we also detect it via viewport vs screen size.
-  const fullscreenRequired = (()=>{
+  const fullscreenRequired = (()=> {
     // iOS browsers (including Chrome on iPhone) do not support element fullscreen reliably.
-    // For mobile we rely on tab/app switch strikes instead of fullscreen enforcement.
+    // Do not treat every touch-capable device as mobile, otherwise touch laptops lose the
+    // fullscreen button at the start gate.
+    const ua = String(navigator.userAgent || "");
+    const mobileUa = /Android|iPhone|iPad|iPod|Mobile/i.test(ua);
+    const ipadDesktopUa = /Macintosh/i.test(ua) && Number(navigator.maxTouchPoints || 0) > 1;
     let coarse = false;
     try { coarse = !!(window.matchMedia && window.matchMedia("(pointer: coarse)").matches); } catch {}
-    try { coarse = coarse || Number(navigator.maxTouchPoints || 0) > 0; } catch {}
-    return !coarse;
+
+    const screenW = Number(screen.width || window.innerWidth || 0);
+    const screenH = Number(screen.height || window.innerHeight || 0);
+    const shortEdge = Math.min(screenW || 0, screenH || 0);
+    const mobileLikeTouch = coarse && Number(navigator.maxTouchPoints || 0) > 0 && shortEdge > 0 && shortEdge <= 900;
+
+    return !(mobileUa || ipadDesktopUa || mobileLikeTouch);
   })();
 
   const isFullscreen = ()=>{
@@ -462,6 +519,112 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     try { await apiPost(`/api/session/${encodeURIComponent(token)}/presence`, { status }); } catch(e){}
   }
 
+  function hasExtendedDisplay(){
+    try { return screen && screen.isExtended === true; } catch(e){}
+    return false;
+  }
+
+  function detectTranslationViolation(){
+    const html = document.documentElement;
+    const body = document.body;
+    const lang = String(html?.getAttribute("lang") || "").trim().toLowerCase();
+    const htmlClass = String(html?.className || "");
+    const bodyClass = String(body?.className || "");
+
+    if (lang && lang !== "en") return `html_lang_${lang}`;
+    if (/\btranslated-(ltr|rtl)\b/i.test(htmlClass)) return "html_translated_class";
+    if (/\btranslated-(ltr|rtl)\b/i.test(bodyClass)) return "body_translated_class";
+    if (document.querySelector(".goog-te-banner-frame, .skiptranslate, .goog-te-menu-frame, .goog-tooltip")) return "google_translate_dom";
+
+    const bodyTop = String(body?.style?.top || "").trim();
+    if (bodyTop && bodyTop !== "0px" && bodyTop !== "auto") return "body_top_shift";
+
+    const notranslateOk = !!(html?.classList?.contains("notranslate") && body?.classList?.contains("notranslate"));
+    if (!notranslateOk) return "notranslate_removed";
+
+    return "";
+  }
+
+  async function triggerTranslationViolation(reason){
+    if (translationViolationTriggered || !examStarted) return;
+    translationViolationTriggered = true;
+    try{ await pingPresence(`translation_detected_${String(reason || "unknown")}`); }catch(e){}
+    void captureAndUploadSnapshot(`translation_detected_${String(reason || "unknown")}`);
+    showLock(
+      "Translation tools are not allowed during the exam.",
+      "Your exam is being submitted and marked as disqualified.",
+      { minMs: 1500 }
+    );
+    autoReason = `disqual_translation_${String(reason || "unknown")}`;
+    await doSubmit(true);
+  }
+
+  function getPreStartTranslationBlockMessage(reason){
+    const suffix = reason ? ` (${String(reason).replace(/_/g, " ")})` : "";
+    return `Disable translation/browser extensions for this site before starting the exam${suffix}.`;
+  }
+
+  function armTranslationGuard(){
+    if (stopTranslationGuard) return;
+
+    const check = ()=>{
+      if (!examStarted || translationViolationTriggered) return;
+      const reason = detectTranslationViolation();
+      if (reason) void triggerTranslationViolation(reason);
+    };
+
+    const observer = new MutationObserver(()=>{ check(); });
+    try{
+      observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["class", "lang", "style", "translate"],
+      });
+    }catch(e){}
+
+    const id = setInterval(check, 1000);
+    check();
+
+    stopTranslationGuard = ()=>{
+      clearInterval(id);
+      try{ observer.disconnect(); }catch(e){}
+      stopTranslationGuard = null;
+    };
+  }
+
+  function armPreStartTranslationGuard(){
+    if (stopPreStartTranslationGuard) return;
+
+    const check = ()=>{
+      if (examStarted) return;
+      if (!elGate || elGate.style.display === "none") return;
+      const reason = detectTranslationViolation();
+      if (!reason) return;
+      if (elStartExam) elStartExam.disabled = true;
+      showGateNotice(getPreStartTranslationBlockMessage(reason), "bad");
+    };
+
+    const observer = new MutationObserver(()=>{ check(); });
+    try{
+      observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["class", "lang", "style", "translate"],
+      });
+    }catch(e){}
+
+    const id = setInterval(check, 1000);
+    check();
+
+    stopPreStartTranslationGuard = ()=>{
+      clearInterval(id);
+      try{ observer.disconnect(); }catch(e){}
+      stopPreStartTranslationGuard = null;
+    };
+  }
+
   function readPreferredCameraId(){
     try { return String(localStorage.getItem(PREF_CAM_KEY) || "").trim(); } catch { return ""; }
   }
@@ -470,6 +633,16 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       const v = String(id || "").trim();
       if (v) localStorage.setItem(PREF_CAM_KEY, v);
       else localStorage.removeItem(PREF_CAM_KEY);
+    } catch {}
+  }
+  function readPreferredSpeakerId(){
+    try { return String(localStorage.getItem(PREF_SPK_KEY) || "").trim(); } catch { return ""; }
+  }
+  function writePreferredSpeakerId(id){
+    try {
+      const v = String(id || "").trim();
+      if (v) localStorage.setItem(PREF_SPK_KEY, v);
+      else localStorage.removeItem(PREF_SPK_KEY);
     } catch {}
   }
 
@@ -495,6 +668,36 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     return vids;
   }
 
+  async function listAudioOutputs(keepSelection){
+    if (!navigator.mediaDevices?.enumerateDevices || !elSpeakerSelect) return [];
+    const canRouteAudio = !!(window.HTMLMediaElement && HTMLMediaElement.prototype && "setSinkId" in HTMLMediaElement.prototype);
+    if (!canRouteAudio){
+      elSpeakerSelect.innerHTML = `<option value="">Default output (browser controlled)</option>`;
+      elSpeakerSelect.value = "";
+      elSpeakerSelect.disabled = true;
+      return [];
+    }
+
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const outs = (devices || []).filter((d)=> d.kind === "audiooutput");
+    const prev = keepSelection ? String(elSpeakerSelect.value || preferredSpeakerId || "") : String(preferredSpeakerId || "");
+    const opts = [`<option value="">Default output</option>`];
+    outs.forEach((d, i)=>{
+      const label = String(d.label || "").trim() || `Speaker ${i + 1}`;
+      opts.push(`<option value="${escapeHtml(String(d.deviceId || ""))}">${escapeHtml(label)}</option>`);
+    });
+    elSpeakerSelect.innerHTML = opts.join("");
+
+    if (prev && outs.some((d)=> String(d.deviceId || "") === prev)) {
+      elSpeakerSelect.value = prev;
+    } else {
+      elSpeakerSelect.value = "";
+    }
+    elSpeakerSelect.disabled = false;
+    preferredSpeakerId = String(elSpeakerSelect.value || "");
+    return outs;
+  }
+
   function loadScript(url){
     return new Promise((resolve, reject)=>{
       const s = document.createElement("script");
@@ -504,6 +707,53 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       s.onerror = ()=> reject(new Error("Failed to load: " + url));
       document.head.appendChild(s);
     });
+  }
+
+  let gateAudioCtx = null;
+  let gateTestAudioEl = null;
+  function ensureGateTestAudioEl(){
+    if (gateTestAudioEl) return gateTestAudioEl;
+    const el = document.createElement("audio");
+    el.preload = "auto";
+    el.autoplay = false;
+    el.style.display = "none";
+    document.body.appendChild(el);
+    gateTestAudioEl = el;
+    return gateTestAudioEl;
+  }
+  async function playGateTestSound(){
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    if (!AudioCtx) throw new Error("This browser does not support the sound test.");
+    if (!gateAudioCtx) gateAudioCtx = new AudioCtx();
+    if (gateAudioCtx.state === "suspended") await gateAudioCtx.resume();
+
+    const audioEl = ensureGateTestAudioEl();
+    const sinkId = String(elSpeakerSelect?.value || preferredSpeakerId || "").trim();
+    if (sinkId && typeof audioEl.setSinkId === "function") {
+      await audioEl.setSinkId(sinkId);
+    }
+
+    const dest = gateAudioCtx.createMediaStreamDestination();
+    audioEl.srcObject = dest.stream;
+    audioEl.muted = false;
+    audioEl.volume = 1;
+    await audioEl.play().catch(()=>{});
+
+    const now = gateAudioCtx.currentTime;
+    const gain = gateAudioCtx.createGain();
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.12, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.55);
+    gain.connect(dest);
+
+    const osc = gateAudioCtx.createOscillator();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.linearRampToValueAtTime(660, now + 0.22);
+    osc.frequency.linearRampToValueAtTime(440, now + 0.45);
+    osc.connect(gain);
+    osc.start(now);
+    osc.stop(now + 0.6);
   }
 
   // -------- Randomization (deterministic per token) --------
@@ -822,6 +1072,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       tabViolations++;
       localStorage.setItem(LS_KEY("tabViolations"), String(tabViolations));
       try{ await pingPresence(reason || "focus_violation"); }catch(e){}
+      scheduleReturnSnapshot(`return_after_${String(reason || "focus_violation")}`, 1000);
 
       showTabToast(
         "Do not switch tabs, windows, or apps during the exam.",
@@ -837,9 +1088,9 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     document.addEventListener("visibilitychange", async ()=>{
       if (!examStarted) return;
       if (document.hidden){
+        clearReturnSnapshotTimer();
         lastHiddenAt = Date.now();
         await pingPresence("tab_hidden");
-        void captureAndUploadSnapshot("tab_hidden");
       }else{
         const awayMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
         lastHiddenAt = 0;
@@ -848,22 +1099,30 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     });
 
     // Losing focus (Alt+Tab, clicking another app/window, multi-monitor, etc.)
+    // Do not score blur/focus as a direct violation because multi-monitor
+    // setups on Windows can trigger it without actually hiding the exam tab.
     window.addEventListener("blur", async ()=>{
       if (!examStarted) return;
+      clearReturnSnapshotTimer();
       lastBlurAt = Date.now();
       await pingPresence("window_blur");
-      void captureAndUploadSnapshot("window_blur");
     });
     window.addEventListener("focus", async ()=>{
       if (!examStarted) return;
       const awayMs = lastBlurAt ? (Date.now() - lastBlurAt) : 0;
       lastBlurAt = 0;
-      // Only count if we actually had a blur.
-      if (awayMs > 0) await registerFocusViolation("window_focus", awayMs);
+      if (awayMs > 0 && !document.hidden){
+        await pingPresence("window_focus_warning");
+        showTabToast(
+          "Keep the exam on your active screen.",
+          "If you are using a second monitor, disconnect it and continue on one display only.",
+          3000
+        );
+      }
     });
 
     // Pointer leaves the exam window (common with 2nd monitor usage).
-    // We trigger a violation only if the pointer stays out for a short time.
+    // Treat it as a warning only; on multi-monitor setups this is too noisy for a strike.
     let mouseOutTimer = null;
     let lastPointerViolationAt = 0;
     const POINTER_LEAVE_TRIGGER_MS = 900;
@@ -888,21 +1147,13 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         if (lastPointerViolationAt && (now - lastPointerViolationAt) < 1500) return;
         lastPointerViolationAt = now;
 
-        tabViolations++;
-        localStorage.setItem(LS_KEY("tabViolations"), String(tabViolations));
         try{ await pingPresence("pointer_left"); }catch(e){}
-        void captureAndUploadSnapshot("pointer_left");
 
         showTabToast(
           "Keep your mouse inside the exam window.",
-          `Violations: ${tabViolations}/${MAX_TAB_VIOLATIONS}`,
+          "If you are using a second monitor, disconnect it and continue on one display only.",
           3000
         );
-
-        if (tabViolations >= MAX_TAB_VIOLATIONS){
-          autoReason = "tab_violations_max";
-          await doSubmit(true);
-        }
       }, POINTER_LEAVE_TRIGGER_MS);
     });
     document.addEventListener("mouseover", ()=>{
@@ -1031,14 +1282,21 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
            const ratioOk = ratio >= 0.04;
  
            const fsOk = fullscreenRequired ? isFullscreen() : true;
+           const displayOk = !hasExtendedDisplay();
            const ackOk = isProctoringAckSatisfied();
-           if (stableMs >= 2000 && ratioOk && fsOk && ackOk){
+           const translationReason = detectTranslationViolation();
+           const translationOk = !translationReason;
+           if (stableMs >= 2000 && ratioOk && fsOk && ackOk && displayOk && translationOk){
               elStartExam.disabled = false;
               showGateNotice("Checks passed. You can start the exam.", "ok");
             }else{
               elStartExam.disabled = true;
              if (!ackOk){
                showGateNotice("Please acknowledge the Remote Proctoring Notice to start the exam.", "bad");
+             } else if (!translationOk){
+               showGateNotice(getPreStartTranslationBlockMessage(translationReason), "bad");
+             } else if (!displayOk){
+               showGateNotice("Please disconnect any second monitor and use one display only.", "bad");
              } else if (!fsOk){
                 showGateNotice("Please enter fullscreen to start the exam.", "bad");
               }else{
@@ -1183,6 +1441,8 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     let camWasOff = false;
     let fsWasOff = false;
     let faceWasMissing = false;
+    let faceReturnSnapshotTimer = null;
+    let captureFaceReturnSnapshot = false;
 
     // IMPORTANT: after the candidate clicks "Start exam", the gate block is hidden.
     // Many browsers reduce or stop frame updates for videos that are display:none.
@@ -1201,7 +1461,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         if (!fsOk){
           if (!fsWasOff) {
             fsWasOff = true;
-            void captureAndUploadSnapshot("fullscreen_off_during_exam");
+            clearReturnSnapshotTimer();
           }
           if (!fsMissingSince) fsMissingSince = Date.now();
           const missMs = Date.now() - fsMissingSince;
@@ -1225,6 +1485,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           }
           return;
         }
+        if (fsWasOff) scheduleReturnSnapshot("return_after_fullscreen_off_during_exam", 1000);
         fsWasOff = false;
         fsMissingSince = 0;
 
@@ -1241,6 +1502,11 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       const camLive = track && track.readyState === "live" && track.enabled !== false;
       if (!camLive){
         camWasOff = true;
+        captureFaceReturnSnapshot = true;
+        if (faceReturnSnapshotTimer) {
+          clearTimeout(faceReturnSnapshotTimer);
+          faceReturnSnapshotTimer = null;
+        }
         if (!missingSince) missingSince = Date.now();
         if (elCamMiniText) elCamMiniText.textContent = "Camera off";
         if (elCamMiniDot) elCamMiniDot.classList.remove("ok");
@@ -1257,19 +1523,31 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
         if (ok){
           missingSince = 0;
+          const shouldScheduleReturnShot = captureFaceReturnSnapshot || faceWasMissing || camWasOff;
           faceWasMissing = false;
           if (elCamMiniText) elCamMiniText.textContent = "Face detected";
           if (elCamMiniDot) elCamMiniDot.classList.add("ok");
           hideLock();
           if (camWasOff){
             camWasOff = false;
-            void captureAndUploadSnapshot("camera_return");
+          }
+          if (shouldScheduleReturnShot && !faceReturnSnapshotTimer){
+            faceReturnSnapshotTimer = setTimeout(()=>{
+              faceReturnSnapshotTimer = null;
+              if (!examStarted) return;
+              captureFaceReturnSnapshot = false;
+              void captureAndUploadSnapshot("face_return_after_missing");
+            }, 2000);
           }
           return;
         }
         if (!faceWasMissing) {
           faceWasMissing = true;
-          void captureAndUploadSnapshot("face_missing_during_exam");
+          captureFaceReturnSnapshot = true;
+          if (faceReturnSnapshotTimer) {
+            clearTimeout(faceReturnSnapshotTimer);
+            faceReturnSnapshotTimer = null;
+          }
         }
 
         if (!missingSince) missingSince = Date.now();
@@ -1302,13 +1580,30 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
 
     stopProctoring = ()=>{
       clearInterval(id);
+      if (faceReturnSnapshotTimer) clearTimeout(faceReturnSnapshotTimer);
       try{ detector.stop(); }catch(e){}
       stopProctoring = null;
     };
   }
 
   function renderTest(payload){
+    const appendCanvasInlineText = (parent, raw, { richText = false } = {})=>{
+      const text = String(raw || "");
+      if (!text) return;
+      const host = document.createElement("span");
+      host.className = "canvas-text-host canvas-inline-host";
+      registerCanvasTextBlock(host, text, {
+        richText,
+        minWidth: 1,
+        widthMode: "natural",
+        canvasClassName: "inline-text-canvas",
+      });
+      parent.appendChild(host);
+    };
+
     elContent.innerHTML = "";
+    hardenNoTranslateTree(elContent);
+    clearCanvasTextBlocks();
     sectionViews = [];
     currentSectionIdx = 0;
 
@@ -1319,11 +1614,25 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       let writingDragId = "";
       const secEl = document.createElement("div");
       secEl.className = "section";
-      secEl.innerHTML = `<h2>${escapeHtml(sec.title || "Section")}</h2>`;
+      const secTitleEl = document.createElement("h2");
+      secTitleEl.className = "canvas-text-host";
+      registerCanvasTextBlock(secTitleEl, String(sec.title || "Section"), {
+        minWidth: 220,
+        closestSelector: ".section",
+        widthMode: "natural",
+        canvasClassName: "section-text-canvas",
+      });
+      secEl.appendChild(secTitleEl);
       if (sec.description){
         const intro = document.createElement("div");
-        intro.className = "small";
-        intro.textContent = String(sec.description);
+        intro.className = "small canvas-text-host";
+        registerCanvasTextBlock(intro, String(sec.description), {
+          richText: true,
+          minWidth: 220,
+          closestSelector: ".section",
+          widthMode: "container",
+          canvasClassName: "instruction-text-canvas",
+        });
         secEl.appendChild(intro);
       }
 
@@ -1374,16 +1683,27 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             gapCard.className = "q";
 
             const gapTitle = document.createElement("div");
-            gapTitle.className = "q-title";
-            gapTitle.textContent = String(dragCfg.title || "Task 1: Drag the correct words into the gaps.");
+            gapTitle.className = "q-title canvas-text-host";
+            registerCanvasTextBlock(gapTitle, String(dragCfg.title || "Task 1: Drag the correct words into the gaps."), {
+              minWidth: 220,
+              closestSelector: ".q",
+              widthMode: "container",
+              canvasClassName: "question-text-canvas",
+            });
             gapCard.appendChild(gapTitle);
 
             if (String(dragCfg.instructions || "").trim()){
               const inst = document.createElement("div");
-              inst.className = "small";
+              inst.className = "small canvas-text-host";
               inst.style.whiteSpace = "pre-wrap";
               inst.style.marginTop = "6px";
-              inst.textContent = String(dragCfg.instructions || "");
+              registerCanvasTextBlock(inst, String(dragCfg.instructions || ""), {
+                richText: true,
+                minWidth: 220,
+                closestSelector: ".q",
+                widthMode: "container",
+                canvasClassName: "instruction-text-canvas",
+              });
               gapCard.appendChild(inst);
             }
 
@@ -1401,7 +1721,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             let idx = 0;
             let m;
             while ((m = rx.exec(rawText))){
-              gapText.appendChild(document.createTextNode(rawText.slice(last, m.index)));
+              appendCanvasInlineText(gapText, rawText.slice(last, m.index));
               idx += 1;
               const gap = document.createElement("span");
               gap.className = "gap-blank";
@@ -1412,13 +1732,18 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
               gapText.appendChild(gap);
               last = m.index + m[0].length;
             }
-            gapText.appendChild(document.createTextNode(rawText.slice(last)));
+            appendCanvasInlineText(gapText, rawText.slice(last));
             gapCard.appendChild(gapText);
 
             const bankTitle = document.createElement("div");
-            bankTitle.className = "small";
+            bankTitle.className = "small canvas-text-host";
             bankTitle.style.marginTop = "10px";
-            bankTitle.textContent = "Word bank:";
+            registerCanvasTextBlock(bankTitle, "Word bank:", {
+              minWidth: 120,
+              closestSelector: ".q",
+              widthMode: "natural",
+              canvasClassName: "instruction-text-canvas",
+            });
             gapCard.appendChild(bankTitle);
 
             const bank = document.createElement("div");
@@ -1432,18 +1757,28 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             for (const word of bankWordsDisplay){
               const chip = document.createElement("button");
               chip.type = "button";
-              chip.className = "word-chip";
+              chip.className = "word-chip canvas-text-host";
               chip.draggable = true;
               chip.dataset.word = word;
-              chip.textContent = word;
+              registerCanvasTextBlock(chip, word, {
+                minWidth: 56,
+                closestSelector: ".word-bank",
+                widthMode: "natural",
+                canvasClassName: "choice-text-canvas",
+              });
               bank.appendChild(chip);
             }
             gapCard.appendChild(bank);
 
             const tip = document.createElement("div");
-            tip.className = "small";
+            tip.className = "small canvas-text-host";
             tip.style.marginTop = "8px";
-            tip.textContent = "Tip: double-click a gap to clear it.";
+            registerCanvasTextBlock(tip, "Tip: double-click a gap to clear it.", {
+              minWidth: 180,
+              closestSelector: ".q",
+              widthMode: "container",
+              canvasClassName: "instruction-text-canvas",
+            });
             gapCard.appendChild(tip);
 
             secEl.appendChild(gapCard);
@@ -1605,7 +1940,12 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             });
 
             if (enableTapMode) {
-              tip.textContent = "Tip: tap a word, then tap a gap. Tap a filled gap to clear it.";
+              registerCanvasTextBlock(tip, "Tip: tap a word, then tap a gap. Tap a filled gap to clear it.", {
+                minWidth: 180,
+                closestSelector: ".q",
+                widthMode: "container",
+                canvasClassName: "instruction-text-canvas",
+              });
 
               gaps.forEach((gap)=>{
                 try{
@@ -1687,26 +2027,66 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           gapCard.className = "q";
 
           const gapTitle = document.createElement("div");
-          gapTitle.className = "q-title";
-          gapTitle.textContent = titleText;
+          gapTitle.className = "q-title canvas-text-host";
+          registerCanvasTextBlock(gapTitle, titleText, {
+            minWidth: 220,
+            closestSelector: ".q",
+            widthMode: "container",
+            canvasClassName: "question-text-canvas",
+          });
           gapCard.appendChild(gapTitle);
 
           const gapText = document.createElement("div");
           gapText.style.lineHeight = "1.8";
           gapText.style.marginTop = "8px";
-          gapText.innerHTML = `
-            Rain makes the <span class="gap-blank" data-index="1" data-qid="w1">(${1})</span> shine.
-            The air smells clean and <span class="gap-blank" data-index="2" data-qid="w2">(${2})</span>.
-            I put on my <span class="gap-blank" data-index="3" data-qid="w3">(${3})</span> and boots.
-            I feel calm and happy. I like rain because it helps
-            <span class="gap-blank" data-index="4" data-qid="w4">(${4})</span> grow and makes trees look fresh.
-          `;
+          appendCanvasInlineText(gapText, "Rain makes the ");
+          (()=> {
+            const gap = document.createElement("span");
+            gap.className = "gap-blank";
+            gap.dataset.index = "1";
+            gap.dataset.qid = "w1";
+            gap.textContent = "(1)";
+            gapText.appendChild(gap);
+          })();
+          appendCanvasInlineText(gapText, " shine.\nThe air smells clean and ");
+          (()=> {
+            const gap = document.createElement("span");
+            gap.className = "gap-blank";
+            gap.dataset.index = "2";
+            gap.dataset.qid = "w2";
+            gap.textContent = "(2)";
+            gapText.appendChild(gap);
+          })();
+          appendCanvasInlineText(gapText, ".\nI put on my ");
+          (()=> {
+            const gap = document.createElement("span");
+            gap.className = "gap-blank";
+            gap.dataset.index = "3";
+            gap.dataset.qid = "w3";
+            gap.textContent = "(3)";
+            gapText.appendChild(gap);
+          })();
+          appendCanvasInlineText(gapText, " and boots.\nI feel calm and happy. I like rain because it helps ");
+          (()=> {
+            const gap = document.createElement("span");
+            gap.className = "gap-blank";
+            gap.dataset.index = "4";
+            gap.dataset.qid = "w4";
+            gap.textContent = "(4)";
+            gapText.appendChild(gap);
+          })();
+          appendCanvasInlineText(gapText, " grow and makes trees look fresh.");
           gapCard.appendChild(gapText);
 
           const bankTitle = document.createElement("div");
-          bankTitle.className = "small";
+          bankTitle.className = "small canvas-text-host";
           bankTitle.style.marginTop = "10px";
-          bankTitle.textContent = "Word bank:";
+          registerCanvasTextBlock(bankTitle, "Word bank:", {
+            minWidth: 120,
+            closestSelector: ".q",
+            widthMode: "natural",
+            canvasClassName: "instruction-text-canvas",
+          });
           gapCard.appendChild(bankTitle);
 
           const bank = document.createElement("div");
@@ -1719,18 +2099,28 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           for (const word of bankWords){
             const chip = document.createElement("button");
             chip.type = "button";
-            chip.className = "word-chip";
+            chip.className = "word-chip canvas-text-host";
             chip.draggable = true;
             chip.dataset.word = word;
-            chip.textContent = word;
+            registerCanvasTextBlock(chip, word, {
+              minWidth: 56,
+              closestSelector: ".word-bank",
+              widthMode: "natural",
+              canvasClassName: "choice-text-canvas",
+            });
             bank.appendChild(chip);
           }
           gapCard.appendChild(bank);
 
           const tip = document.createElement("div");
-          tip.className = "small";
+          tip.className = "small canvas-text-host";
           tip.style.marginTop = "8px";
-          tip.textContent = "Tip: drag words into gaps. Drag back to the word bank (or double-click a gap) to clear it.";
+          registerCanvasTextBlock(tip, "Tip: drag words into gaps. Drag back to the word bank (or double-click a gap) to clear it.", {
+            minWidth: 180,
+            closestSelector: ".q",
+            widthMode: "container",
+            canvasClassName: "instruction-text-canvas",
+          });
           gapCard.appendChild(tip);
 
           secEl.appendChild(gapCard);
@@ -1875,7 +2265,12 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           });
 
           if (enableTapMode) {
-            tip.textContent = "Tip: tap a word, then tap a gap. Tap a filled gap to clear it.";
+            registerCanvasTextBlock(tip, "Tip: tap a word, then tap a gap. Tap a filled gap to clear it.", {
+              minWidth: 180,
+              closestSelector: ".q",
+              widthMode: "container",
+              canvasClassName: "instruction-text-canvas",
+            });
 
             // Make gaps focusable for accessibility and mobile keyboards.
             gaps.forEach((gap)=>{
@@ -1984,14 +2379,9 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           playBtn.className = "primary";
           playBtn.textContent = "Play Listening";
 
-          const skipBtn = document.createElement("button");
-          skipBtn.type = "button";
-          skipBtn.className = "primary";
-          skipBtn.textContent = "Skip to end (testing)";
-
           const audioMsg = document.createElement("div");
           audioMsg.className = "small";
-          audioMsg.textContent = "Press Play to start the listening section. It can be played once.";
+          audioMsg.textContent = "Listening starts automatically. It can be played once.";
 
           let started = false;
           let noteAdded = false;
@@ -2013,7 +2403,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             lockAudio();
           }
 
-          playBtn.addEventListener("click", ()=>{
+          const startListeningPlayback = async ()=>{
             const plays = getPlayCount();
             if (plays >= maxPlays){
               showStatus("Audio can only be played once.", "bad");
@@ -2025,52 +2415,37 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
             playBtn.disabled = true;
             playBtn.textContent = "Now playing";
             audioMsg.textContent = "Listening in progress...";
-            (async ()=>{
-              try{
-                const r = await fetch(`/api/session/${encodeURIComponent(token)}/listening-ticket`, {
-                  method: "POST",
-                  credentials: "same-origin",
-                  headers: { "Content-Type": "application/json" },
-                  body: "{}",
-                });
-                const j = await r.json().catch(()=> ({}));
-                if (!r.ok) throw new Error(String(j?.error || j?.message || `Listening unavailable (${r.status})`));
-                const url = String(j?.url || "").trim();
-                if (!url) throw new Error("Listening unavailable.");
-                setPlayCount(plays + 1);
-                audio.src = url;
-                audio.currentTime = 0;
-                await audio.play();
-              }catch(e){
-                started = false;
-                playBtn.disabled = false;
-                playBtn.textContent = "Play Listening";
-                const msg = String(e?.message || "");
-                if (msg.includes("listening_denied") || msg.includes("denied")) {
-                  audioMsg.textContent = "Listening audio is locked.";
-                  lockAudio();
-                } else {
-                  audioMsg.textContent = msg || "Unable to play audio on this browser/device.";
-                }
+            try{
+              const r = await fetch(`/api/session/${encodeURIComponent(token)}/listening-ticket`, {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json" },
+                body: "{}",
+              });
+              const j = await r.json().catch(()=> ({}));
+              if (!r.ok) throw new Error(String(j?.error || j?.message || `Listening unavailable (${r.status})`));
+              const url = String(j?.url || "").trim();
+              if (!url) throw new Error("Listening unavailable.");
+              setPlayCount(plays + 1);
+              audio.src = url;
+              audio.currentTime = 0;
+              await audio.play();
+            }catch(e){
+              started = false;
+              playBtn.disabled = false;
+              playBtn.textContent = "Play Listening";
+              const msg = String(e?.message || "");
+              if (msg.includes("listening_denied") || msg.includes("denied")) {
+                audioMsg.textContent = "Listening audio is locked.";
+                lockAudio();
+              } else {
+                audioMsg.textContent = msg || "Unable to play audio on this browser/device.";
               }
-            })();
-          });
-
-          skipBtn.addEventListener("click", ()=>{
-            const jumpToEnd = ()=>{
-              const d = Number(audio.duration || 0);
-              if (!Number.isFinite(d) || d <= 0) return;
-              audio.currentTime = Math.max(0, d - 0.05);
-              if (audio.paused) {
-                audio.play().catch(()=>{});
-              }
-            };
-            if (!Number.isFinite(Number(audio.duration)) || Number(audio.duration) <= 0){
-              audio.addEventListener("loadedmetadata", jumpToEnd, { once: true });
-              audio.load();
-              return;
             }
-            jumpToEnd();
+          };
+
+          playBtn.addEventListener("click", ()=>{
+            void startListeningPlayback();
           });
 
           audio.addEventListener("ended", ()=>{
@@ -2081,11 +2456,16 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           });
 
           controlsRow.appendChild(playBtn);
-          controlsRow.appendChild(skipBtn);
           controlsRow.appendChild(audioMsg);
           audioWrap.appendChild(controlsRow);
           audioWrap.appendChild(audio);
           secEl.appendChild(audioWrap);
+
+          secEl._autoStartListening = ()=> {
+            if (localStorage.getItem(endedKey) === "1") return;
+            if (getPlayCount() >= maxPlays) return;
+            void startListeningPlayback();
+          };
         }
       }
 
@@ -2101,8 +2481,14 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           info.className = secKind === "reading" ? "q reading-passage" : "q";
           const raw = String(item.prompt || "");
           const p = document.createElement("div");
-          p.className = "small";
-          p.innerHTML = richTextHtml(raw);
+          p.className = "small canvas-text-host";
+          registerCanvasTextBlock(p, raw, {
+            richText: true,
+            minWidth: secKind === "reading" ? 240 : 220,
+            closestSelector: secKind === "reading" ? ".reading-passage" : ".q",
+            widthMode: "container",
+            canvasClassName: secKind === "reading" ? "reading-canvas" : "instruction-text-canvas",
+          });
           info.appendChild(p);
           secEl.appendChild(info);
           continue;
@@ -2113,8 +2499,12 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         q.dataset.qid = item.id;
 
         const header = document.createElement("div");
-        header.className = "q-title";
-        header.textContent = item.prompt || "";
+        header.className = "q-title canvas-text-host";
+        registerCanvasTextBlock(header, String(item.prompt || ""), {
+          minWidth: 220,
+          closestSelector: ".q",
+          canvasClassName: "question-text-canvas",
+        });
         if (item.type === "writing"){
           header.style.whiteSpace = "pre-wrap";
           header.style.lineHeight = "1.5";
@@ -2125,10 +2515,19 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           (item.choices || []).forEach((c, idx)=>{
             const row = document.createElement("label");
             row.className = "choice";
-            row.innerHTML = `
-              <input type="radio" name="${escapeHtml(item.id)}" value="${idx}">
-              <div>${escapeHtml(c)}</div>
-            `;
+            const input = document.createElement("input");
+            input.type = "radio";
+            input.name = item.id;
+            input.value = String(idx);
+            const labelText = document.createElement("div");
+            labelText.className = "canvas-text-host";
+            registerCanvasTextBlock(labelText, String(c || ""), {
+              minWidth: 120,
+              closestSelector: ".choice",
+              canvasClassName: "choice-text-canvas",
+            });
+            row.appendChild(input);
+            row.appendChild(labelText);
             q.appendChild(row);
           });
 
@@ -2136,10 +2535,19 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
           ["true","false"].forEach((val)=>{
             const row = document.createElement("label");
             row.className = "choice";
-            row.innerHTML = `
-              <input type="radio" name="${escapeHtml(item.id)}" value="${val}">
-              <div>${val === "true" ? "True" : "False"}</div>
-            `;
+            const input = document.createElement("input");
+            input.type = "radio";
+            input.name = item.id;
+            input.value = val;
+            const labelText = document.createElement("div");
+            labelText.className = "canvas-text-host";
+            registerCanvasTextBlock(labelText, val === "true" ? "True" : "False", {
+              minWidth: 120,
+              closestSelector: ".choice",
+              canvasClassName: "choice-text-canvas",
+            });
+            row.appendChild(input);
+            row.appendChild(labelText);
             q.appendChild(row);
           });
         } else {
@@ -2186,9 +2594,11 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       }
 
       if (hasBack || hasNext) secEl.appendChild(nav);
+      hardenNoTranslateTree(secEl);
       elContent.appendChild(secEl);
-      sectionViews.push({ el: secEl, kind: secKind });
+      sectionViews.push({ el: secEl, kind: secKind, autoStart: secEl._autoStartListening });
     }
+    queueCanvasTextRender();
 
     // Re-apply any saved answers after rendering
     restoreAnswers();
@@ -2283,7 +2693,10 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       const disqualified = !!(r && r.disqualified) || /disqual/i.test(String(autoReason || ""));
       showFinalScreen(disqualified);
       hideLock();
+      clearReturnSnapshotTimer();
       try{ if (stopProctoring) stopProctoring(); }catch(e){}
+      try{ if (stopPreStartTranslationGuard) stopPreStartTranslationGuard(); }catch(e){}
+      try{ if (stopTranslationGuard) stopTranslationGuard(); }catch(e){}
       stopCamera();
       if (elCamMini) elCamMini.style.display = "none";
     } finally {
@@ -2292,6 +2705,12 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
   }
 
   elSubmit.addEventListener("click", async ()=>{
+    const ok = await uiConfirm("Are you sure you want to submit your test?", {
+      title: "Submit Test",
+      yesText: "OK",
+      noText: "Cancel",
+    });
+    if (!ok) return;
     elSubmit.disabled = true;
     try{ await doSubmit(false); }
     finally{ elSubmit.disabled = false; }
@@ -2302,11 +2721,18 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     const first = await apiGet(`/api/session/${encodeURIComponent(token)}`);
     const cfg = await apiGet("/api/config").catch(()=> ({}));
     applyProctoringConfig(cfg && cfg.proctoring ? cfg.proctoring : null);
+    hardenCameraVideoEl(elVideo);
+    hardenCameraVideoEl(elVideoMini);
+    installCanvasTextAutoResize();
+    hardenNoTranslateTree(document.documentElement);
+    hardenNoTranslateTree(document.body);
+    hardenNoTranslateTree(elGate);
+    hardenNoTranslateTree(elContent);
     enableCamMiniDrag();
 
     proctoringAckedServer = !!(first && first.session && first.session.proctoringAcked);
-    if (proctoringAckedServer && elProctoringAck){
-      try { elProctoringAck.checked = true; elProctoringAck.disabled = true; } catch {}
+    if (elProctoringAck){
+      try { elProctoringAck.checked = false; elProctoringAck.disabled = false; } catch {}
     }
 
     const serverNow = Number(first.serverNow || Date.now());
@@ -2396,18 +2822,23 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
     }
 
     let stopGateLoop = null;
+    armPreStartTranslationGuard();
     preferredCameraId = readPreferredCameraId();
+    preferredSpeakerId = readPreferredSpeakerId();
     await listVideoInputs(false).catch(()=>[]);
+    await listAudioOutputs(false).catch(()=>[]);
     if (elCamSelect) elCamSelect.value = preferredCameraId || "";
+    if (elSpeakerSelect && !elSpeakerSelect.disabled) elSpeakerSelect.value = preferredSpeakerId || "";
 
     if (elRefreshCams){
       elRefreshCams.addEventListener("click", async ()=>{
         try{
           elRefreshCams.disabled = true;
           await listVideoInputs(true);
+          await listAudioOutputs(true);
           showGateNotice("Camera list refreshed.", "");
         }catch{
-          showGateNotice("Could not read camera devices.", "bad");
+          showGateNotice("Could not read device list.", "bad");
         }finally{
           elRefreshCams.disabled = false;
         }
@@ -2453,10 +2884,11 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       });
     }
 
-    // On mobile (coarse pointer) fullscreen isn't reliably supported; hide requirement UI.
-    if (!fullscreenRequired) {
-      try { if (elReqFullscreen) elReqFullscreen.style.display = "none"; } catch {}
-      try { if (elGoFullscreen) elGoFullscreen.style.display = "none"; } catch {}
+    if (elSpeakerSelect){
+      elSpeakerSelect.addEventListener("change", ()=>{
+        preferredSpeakerId = String(elSpeakerSelect.value || "");
+        writePreferredSpeakerId(preferredSpeakerId);
+      });
     }
 
     // Fullscreen button + enforcement before start
@@ -2490,6 +2922,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       try{
         const camId = elCamSelect ? String(elCamSelect.value || preferredCameraId || "") : preferredCameraId;
         await initCamera(camId);
+        await listAudioOutputs(true).catch(()=>[]);
         stopGateLoop = await startFaceGate();
       }catch(e){
         await pingPresence("camera_denied");
@@ -2501,9 +2934,36 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       }
     });
 
+    elTestSound?.addEventListener("click", async ()=>{
+      if (elTestSound) elTestSound.disabled = true;
+      try{
+        await playGateTestSound();
+        const speakerName = (()=> {
+          const opt = elSpeakerSelect?.options?.[elSpeakerSelect.selectedIndex];
+          return String(opt?.textContent || "selected output").trim();
+        })();
+        showTestSoundStatus(`Sound test played on ${speakerName}. If you did not hear it, check your speakers or headphones.`, "ok");
+      }catch(e){
+        showTestSoundStatus(String(e?.message || e || "Sound test failed."), "bad");
+      }finally{
+        if (elTestSound) {
+          setTimeout(()=>{ elTestSound.disabled = false; }, 250);
+        }
+      }
+    });
+
     elStartExam.addEventListener("click", async ()=>{
       elStartExam.disabled = true;
       try{
+        const translationReason = detectTranslationViolation();
+        if (translationReason){
+          showGateNotice(getPreStartTranslationBlockMessage(translationReason), "bad");
+          return;
+        }
+        if (hasExtendedDisplay()){
+          showGateNotice("Please disconnect any second monitor and use one display only.", "bad");
+          return;
+        }
         if (fullscreenRequired && !isFullscreen()){
           showGateNotice("Please enter fullscreen to start the exam.", "bad");
           return;
@@ -2538,6 +2998,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
         armAntiResetAndTabLock();
         renderTest(randomizedPayload);
         wireAutosave();
+        armTranslationGuard();
         await startCameraPresenceProctoring();
         // First frame is often black immediately after starting; delay snapshot slightly.
         setTimeout(() => { void captureAndUploadSnapshot("exam_start"); }, 5000);
@@ -2548,7 +3009,7 @@ import { qs, qsa, apiGet, apiPost, fmtTime, escapeHtml, nowMs } from "/app.js";
       }
     });
 
-    showGateNotice("Click Enable camera to continue. Time is already running.", "");
+    showGateNotice("Disable any translation program or extension for this site, then click Enable camera. Time is already running.", "");
   }
 
   boot().catch((e)=>{

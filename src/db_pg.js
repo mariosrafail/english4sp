@@ -1784,12 +1784,14 @@ async function examinerCanAccessSession({ sessionId, examinerUsername }) {
 
 async function listCandidates() {
   const r = await q(
-    `SELECT s.id AS "sessionId", s.name AS "candidateName", s.token, s.submitted,
+    `SELECT s.id AS "sessionId", s.name AS "candidateName",
+            COALESCE(c.email, '') AS email, s.token, s.submitted,
             s.exam_period_id AS "examPeriodId",
             qg.total_grade AS "totalGrade",
             COALESCE(s.disqualified, FALSE) AS "disqualified",
             COALESCE(ex.username, '') AS "assignedExaminer"
      FROM public.sessions s
+     LEFT JOIN public.candidates c ON c.id = s.candidate_id
      LEFT JOIN public.question_grades qg ON qg.session_id = s.id
      LEFT JOIN public.examiner_assignments ea ON ea.session_id = s.id
      LEFT JOIN public.examiners ex ON ex.id = ea.examiner_id

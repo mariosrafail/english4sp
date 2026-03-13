@@ -24,6 +24,14 @@ module.exports = function registerCoreRoutes(app, ctx) {
     return res.redirect("/examiners.html");
   });
 
+  // Best-effort: discourage built-in browser translation on the candidate exam page.
+  app.use((req, res, next) => {
+    if (req.path !== "/exam.html") return next();
+    res.setHeader("Content-Language", "en");
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    next();
+  });
+
   // Static UI
   app.use(express.static(path.join(rootDir, "public")));
 

@@ -1,0 +1,127 @@
+{
+  "generatedAtUtc": "2026-03-03T16:02:19.658Z",
+  "config": {
+    "baseUrl": "https://english4sp.stinis.ddns.net",
+    "linksFile": "C:/Users/Marios/Desktop/sessions_examperiod_2.xlsx",
+    "tokens": 50,
+    "concurrency": 50,
+    "withPresence": true,
+    "withListening": true,
+    "withSnapshots": true,
+    "realisticFlow": true,
+    "snapshotCount": 6,
+    "snapshotSizeKb": 900,
+    "durationMinutes": 13,
+    "presenceIntervalSec": 25,
+    "listeningIntervalSec": 20,
+    "listeningChunkKb": 512,
+    "listeningActions": 1,
+    "playStartMinute": 1,
+    "playEndMinute": 2,
+    "audioWaitMinutes": 5,
+    "answerPhaseMinutes": 4,
+    "submitWindowMinutes": 2,
+    "timeoutMs": 30000,
+    "failRateThreshold": 1,
+    "strictExamLinks": true
+  },
+  "summary": {
+    "total": 50,
+    "ok": 50,
+    "skipped": 0,
+    "failed": 0,
+    "failRate": 0,
+    "elapsedSec": 787.4083382
+  },
+  "failureReasons": {},
+  "endpoints": {
+    "GET /api/session/:token": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 2608.7178,
+      "p95Ms": 2924.6636,
+      "maxMs": 2969.246,
+      "statuses": {
+        "200": 50
+      }
+    },
+    "POST /api/session/:token/proctoring-ack": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 2052.4931000000006,
+      "p95Ms": 2087.5311,
+      "maxMs": 2098.3635000000004,
+      "statuses": {
+        "200": 50
+      }
+    },
+    "POST /api/session/:token/start": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 2064.5802000000003,
+      "p95Ms": 2097.9791999999998,
+      "maxMs": 2116.8687,
+      "statuses": {
+        "200": 50
+      }
+    },
+    "POST /api/session/:token/presence": {
+      "calls": 1412,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 141.88240000000224,
+      "p95Ms": 1004.2765999999974,
+      "maxMs": 2930.175099999993,
+      "statuses": {
+        "200": 1412
+      }
+    },
+    "POST /api/session/:token/listening-ticket": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 1122.9830000000075,
+      "p95Ms": 3186.1309000000037,
+      "maxMs": 3635.3944000000047,
+      "statuses": {
+        "200": 50
+      }
+    },
+    "GET /api/session/:token/listening-audio": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 283.53949999999895,
+      "p95Ms": 1157.8359999999957,
+      "maxMs": 2078.8631999999925,
+      "statuses": {
+        "206": 50
+      }
+    },
+    "POST /api/session/:token/snapshot": {
+      "calls": 295,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 5796.149300000048,
+      "p95Ms": 8195.38400000002,
+      "maxMs": 8800.459900000002,
+      "statuses": {
+        "200": 295
+      }
+    },
+    "POST /api/session/:token/submit": {
+      "calls": 50,
+      "fail": 0,
+      "failRate": 0,
+      "p50Ms": 822.7678000000305,
+      "p95Ms": 1649.0712999999523,
+      "maxMs": 1690.3005999999586,
+      "statuses": {
+        "200": 50
+      }
+    }
+  }
+}

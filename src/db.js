@@ -1180,18 +1180,22 @@ async function listCandidates({ examPeriodId } = {}) {
   const ep = examPeriodId ? Number(examPeriodId) : null;
   const rows = await all(
     ep
-      ? `SELECT s.id AS sessionId, s.exam_period_id AS examPeriodId, s.name AS candidateName, s.token, s.submitted,
+      ? `SELECT s.id AS sessionId, s.exam_period_id AS examPeriodId, s.name AS candidateName,
+               COALESCE(c.email, '') AS email, s.token, s.submitted,
                q.total_grade AS totalGrade, COALESCE(s.disqualified, 0) AS disqualified,
                '' AS assignedExaminer
          FROM sessions s
+         LEFT JOIN candidates c ON c.id = s.candidate_id
          LEFT JOIN question_grades q ON q.session_id = s.id
          WHERE s.exam_period_id = ?
          ORDER BY s.id DESC
          LIMIT 5000`
-      : `SELECT s.id AS sessionId, s.exam_period_id AS examPeriodId, s.name AS candidateName, s.token, s.submitted,
+      : `SELECT s.id AS sessionId, s.exam_period_id AS examPeriodId, s.name AS candidateName,
+               COALESCE(c.email, '') AS email, s.token, s.submitted,
                q.total_grade AS totalGrade, COALESCE(s.disqualified, 0) AS disqualified,
                '' AS assignedExaminer
          FROM sessions s
+         LEFT JOIN candidates c ON c.id = s.candidate_id
          LEFT JOIN question_grades q ON q.session_id = s.id
          ORDER BY s.id DESC
          LIMIT 5000`,
