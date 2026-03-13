@@ -335,6 +335,22 @@ function createAdminCandidatesHelpers(deps) {
     if (!Number.isFinite(sid) || sid <= 0) return { ok: false, deleted: 0, errors: [{ error: "invalid_session_id" }] };
     if (typeof DB.listSessionSnapshots !== "function") return { ok: true, deleted: 0, errors: [] };
 
+    let sessionInfo = null;
+    if (typeof DB.listCandidates === "function") {
+      try {
+        const rows = await DB.listCandidates();
+        const match = Array.isArray(rows)
+          ? rows.find((row) => Number(row?.sessionId || 0) === sid)
+          : null;
+        if (match) {
+          sessionInfo = {
+            token: String(match.token || "").trim(),
+            examPeriodId: Number(match.examPeriodId || 0) || null,
+          };
+        }
+      } catch {}
+    }
+
     let snaps = [];
     try {
       snaps = await DB.listSessionSnapshots({ sessionId: sid, limit: 2000 });
@@ -349,7 +365,6 @@ function createAdminCandidatesHelpers(deps) {
           .filter(Boolean)
       )
     );
-    if (!paths.length) return { ok: true, deleted: 0, errors: [] };
 
     const dirsToTry = Array.from(
       new Set(
@@ -359,10 +374,37 @@ function createAdminCandidatesHelpers(deps) {
           .filter(Boolean)
       )
     ).sort((a, b) => b.length - a.length);
+    const errors = [];
+
+    if (sessionInfo?.token) {
+      if (Number.isFinite(sessionInfo.examPeriodId) && sessionInfo.examPeriodId > 0) {
+        dirsToTry.unshift(`snapshots/ep_${sessionInfo.examPeriodId}/${sessionInfo.token}`);
+      } else {
+        try {
+          const snapRoot = typeof Storage.resolvePath === "function"
+            ? Storage.resolvePath("snapshots")
+            : null;
+          const snapRootAbs = String(snapRoot?.abs || "");
+          if (snapRootAbs) {
+            const epEntries = await fs.promises.readdir(snapRootAbs, { withFileTypes: true }).catch((e) => {
+              if (e && e.code === "ENOENT") return [];
+              throw e;
+            });
+            for (const epEntry of epEntries || []) {
+              if (!epEntry?.isDirectory?.()) continue;
+              const relDir = `snapshots/${epEntry.name}/${sessionInfo.token}`;
+              dirsToTry.unshift(relDir);
+            }
+          }
+        } catch (e) {
+          // Keep going with the snapshot paths we already know.
+          errors.push({ path: "snapshots", error: String(e?.message || "snapshot_scan_failed") });
+        }
+      }
+    }
 
     const settled = await Promise.allSettled(paths.map((p) => Storage.deleteFile(p)));
     let deleted = 0;
-    const errors = [];
     for (let i = 0; i < settled.length; i++) {
       const r = settled[i];
       const p = paths[i];
@@ -386,11 +428,19 @@ function createAdminCandidatesHelpers(deps) {
           throw e;
         });
         if (entries === null) continue;
-        if (entries.length > 0) continue;
-        await fs.promises.rmdir(absDir).catch((e) => {
-          if (e && (e.code === "ENOENT" || e.code === "ENOTEMPTY")) return;
-          throw e;
-        });
+        if (entries.length === 0) {
+          await fs.promises.rmdir(absDir).catch((e) => {
+            if (e && (e.code === "ENOENT" || e.code === "ENOTEMPTY")) return;
+            throw e;
+          });
+          continue;
+        }
+
+        const lastPart = relDir.split("/").filter(Boolean).slice(-1)[0] || "";
+        const shouldDeleteTree = !!sessionInfo?.token && lastPart === sessionInfo.token;
+        if (!shouldDeleteTree) continue;
+
+        await fs.promises.rm(absDir, { recursive: true, force: true });
       } catch (e) {
         errors.push({ path: relDir, error: String(e?.message || "delete_empty_dir_failed") });
       }
