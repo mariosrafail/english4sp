@@ -272,6 +272,39 @@ module.exports = function registerAdminCandidatesRoutes(app, ctx) {
     res.json(await DB.listCandidates());
   });
 
+  app.put("/api/admin/candidates/:sessionId/examiner", async (req, res) => {
+    await ensureInit();
+    const a = await adminAuth(req, res);
+    if (!a.ok) return res.status(401).json({ error: "Not authenticated" });
+    if (typeof DB.setSessionAssignedExaminer !== "function") {
+      return res.status(501).json({ error: "Not supported on this database adapter" });
+    }
+
+    const sid = Number(req.params.sessionId);
+    if (!Number.isFinite(sid) || sid <= 0) {
+      return res.status(400).json({ error: "Invalid session id" });
+    }
+
+    const examinerUsername = String(req.body?.examinerUsername || "").trim();
+    if (!examinerUsername) {
+      return res.status(400).json({ error: "Invalid examiner username" });
+    }
+
+    try {
+      const out = await DB.setSessionAssignedExaminer({ sessionId: sid, examinerUsername });
+      const rows = await DB.listCandidates();
+      const row = Array.isArray(rows) ? rows.find((x) => Number(x?.sessionId || 0) === sid) : null;
+      return res.json({
+        ok: true,
+        sessionId: sid,
+        examinerUsername: String(out?.examinerUsername || examinerUsername),
+        row: row || null,
+      });
+    } catch (e) {
+      return res.status(400).json({ error: e?.message || "set_session_examiner_failed" });
+    }
+  });
+
   app.get("/api/admin/candidates/:sessionId/details", async (req, res) => {
     try {
       await ensureInit();

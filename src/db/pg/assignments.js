@@ -206,12 +206,53 @@ function createPgAssignmentHelpers(deps) {
     return String(row?.username || "");
   }
 
+  async function setSessionAssignedExaminer({ sessionId, examinerUsername } = {}) {
+    const sid = Number(sessionId);
+    if (!Number.isFinite(sid) || sid <= 0) throw new Error("Invalid session id");
+
+    const s = await q1(`SELECT id FROM public.sessions WHERE id = $1 LIMIT 1;`, [sid]);
+    if (!s) throw new Error("Session not found");
+
+    const uname = String(examinerUsername || "").trim();
+    if (!uname) throw new Error("Invalid examiner username");
+
+    const ex = await q1(`SELECT id, username FROM public.examiners WHERE username = $1 LIMIT 1;`, [uname]);
+    if (!ex) throw new Error("Invalid examiner username");
+
+    const exid = Number(ex.id || 0);
+    if (!Number.isFinite(exid) || exid <= 0) throw new Error("Invalid examiner username");
+
+    await q(
+      `INSERT INTO public.examiner_assignments (session_id, examiner_id, assigned_at_utc_ms)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (session_id)
+       DO UPDATE SET
+         examiner_id = EXCLUDED.examiner_id,
+         assigned_at_utc_ms = EXCLUDED.assigned_at_utc_ms;`,
+      [sid, exid, Date.now()]
+    );
+
+    await q(
+      `UPDATE public.speaking_slots
+       SET examiner_username = $2,
+           updated_at_utc_ms = $3
+       WHERE session_id = $1;`,
+      [sid, String(ex.username || uname), Date.now()]
+    );
+
+    return {
+      sessionId: sid,
+      examinerUsername: String(ex.username || uname),
+    };
+  }
+
   return {
     assignSessionsToLeastLoadedExaminers,
     assignSessionsBalancedAcrossExaminers,
     assignSingleToLeastLoadedRandomTie,
     autoAssignUnassignedSessions,
     ensureSessionAssignedExaminer,
+    setSessionAssignedExaminer,
   };
 }
 

@@ -49,6 +49,7 @@ const PAGE_SIZE_LS_KEY = "admin_candidates_pageSize_v1";
 let pageSize = 20;
 
 let allPeriods = [];
+let allExaminers = [];
 const selectedIds = new Set();
 
 let applyTimer = null;
@@ -205,6 +206,35 @@ function rebuildExamPeriodOptions() {
   else elExamPeriod.value = "";
 }
 
+function rebuildExaminerFilterOptions() {
+  if (!elExaminerFilter) return;
+  const current = String(elExaminerFilter.value || "").trim();
+  const fromRows = (allRows || []).map((r) => String(r.assignedExaminer || "").trim()).filter(Boolean);
+  const names = Array.from(new Set([
+    ...(allExaminers || []),
+    ...fromRows,
+  ])).sort((a, b) => a.localeCompare(b));
+  elExaminerFilter.innerHTML = `<option value="">All examiners</option>` +
+    names.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join("");
+  if (current && names.includes(current)) elExaminerFilter.value = current;
+}
+
+function buildExaminerOptionsHtml(selectedExaminer) {
+  const selected = String(selectedExaminer || "").trim();
+  const names = Array.from(new Set([
+    ...(allExaminers || []),
+    selected,
+  ].filter(Boolean))).sort((a, b) => a.localeCompare(b));
+  if (!names.length) return `<option value="">No examiners</option>`;
+  return names
+    .map((name) => {
+      const safe = escapeHtml(name);
+      const sel = name === selected ? " selected" : "";
+      return `<option value="${safe}"${sel}>${safe}</option>`;
+    })
+    .join("");
+}
+
 function applySort(rows) {
   const mode = elSort.value;
   const out = [...rows];
@@ -345,7 +375,14 @@ function render() {
           <td>${nameCell}</td>
           <td><span class="mono">${escapeHtml(String(r.email || "-"))}</span></td>
           <td><span class="mono">${escapeHtml(getPeriodName(r.examPeriodId))}</span></td>
-          <td><span class="mono">${escapeHtml(String(r.assignedExaminer || "-"))}</span></td>
+          <td>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <select class="input mono candidate-examiner-input" data-sid="${id}" style="min-width:150px; max-width:180px;">
+                ${buildExaminerOptionsHtml(String(r.assignedExaminer || ""))}
+              </select>
+              <button class="btn candidate-examiner-save-btn" data-action="save-examiner" data-sid="${id}" type="button" style="width:auto; min-width:62px; padding:6px 10px;">Save</button>
+            </div>
+          </td>
           <td><span class="mono">${escapeHtml(r.token || "")}</span></td>
           <td>${submittedFmt(!!r.submitted)}</td>
           <td>${isDisq ? '<span class="pill" title="Disqualified">DISQ</span> ' : ""}${gradeFmt(totalShown)}</td>
@@ -416,13 +453,19 @@ async function load() {
   elTbody.innerHTML = `<tr><td colspan="10" class="muted">Loading...</td></tr>`;
   loadPageSize();
   applyTableWrapSizing();
-  const [rows, periods] = await Promise.all([
+  const [rows, periods, examiners] = await Promise.all([
     apiGet("/api/admin/candidates"),
     apiGet("/api/admin/exam-periods").catch(() => []),
+    apiGet("/api/admin/examiners").catch(() => []),
   ]);
   allRows = Array.isArray(rows) ? rows : [];
   allPeriods = Array.isArray(periods) ? periods : [];
+  allExaminers = (Array.isArray(examiners) ? examiners : [])
+    .map((x) => String(x?.username || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
   rebuildExamPeriodOptions();
+  rebuildExaminerFilterOptions();
   applyFilters(false);
 }
 
@@ -434,6 +477,7 @@ async function autoRefresh() {
       const keep = new Set((allRows || []).map((r) => Number(r.sessionId)));
       for (const sid of Array.from(selectedIds)) if (!keep.has(Number(sid))) selectedIds.delete(Number(sid));
       rebuildExamPeriodOptions();
+      rebuildExaminerFilterOptions();
       applyFilters(false);
     }
   } catch (e) {
@@ -574,6 +618,46 @@ elTbody.addEventListener("change", (ev) => {
 });
 
 elTbody.addEventListener("click", async (ev) => {
+  const saveExaminerBtn = ev.target?.closest?.("button[data-action='save-examiner']");
+  if (saveExaminerBtn) {
+    const sid = Number(saveExaminerBtn.getAttribute("data-sid"));
+    if (!Number.isFinite(sid) || sid <= 0) return;
+    const selectEl = document.querySelector(`select.candidate-examiner-input[data-sid="${sid}"]`);
+    const examinerUsername = String(selectEl?.value || "").trim();
+    if (!examinerUsername) {
+      await uiAlert("Please select examiner.", { title: "Examiner Required" });
+      return;
+    }
+
+    try {
+      saveExaminerBtn.disabled = true;
+      showCandidatesBusy("Saving examiner. Please wait...");
+      const r = await fetch(`/api/admin/candidates/${encodeURIComponent(String(sid))}/examiner`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        body: JSON.stringify({ examinerUsername }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401) {
+        location.href = "/admin/login.html";
+        return;
+      }
+      if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+
+      const row = allRows.find((x) => Number(x.sessionId) === sid);
+      if (row) row.assignedExaminer = String(j?.examinerUsername || examinerUsername);
+      rebuildExaminerFilterOptions();
+      applyFilters(false);
+    } catch (e) {
+      await uiAlert(String(e?.message || e), { title: "Save Examiner Error" });
+    } finally {
+      hideCandidatesBusy();
+      saveExaminerBtn.disabled = false;
+    }
+    return;
+  }
+
   const openBtn = ev.target?.closest?.("button[data-action='open-review']");
   if (openBtn) {
     const sid = Number(openBtn.getAttribute("data-sid"));

@@ -19,6 +19,7 @@ const elPageMax = qs("#pageMax");
 let _rows = [];
 let _view = [];
 let _page = 1;
+let _examiners = [];
 const _busyStops = [];
 
 function showBusy(message) {
@@ -80,14 +81,62 @@ async function saveSpeakingStart(slotId) {
   }
 }
 
+async function saveSpeakingExaminer(slotId) {
+  const sid = Number(slotId);
+  if (!Number.isFinite(sid) || sid <= 0) return;
+  const examinerEl = document.querySelector(`select.speaking-examiner-input[data-slot-id="${sid}"]`);
+  const examinerUsername = String(examinerEl?.value || "").trim();
+  if (!examinerUsername) throw new Error("Please select examiner");
+  showBusy("Saving...");
+  try {
+    const r = await fetch(`/api/admin/speaking-slots/${encodeURIComponent(sid)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      body: JSON.stringify({ examinerUsername }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || `HTTP ${r.status}`);
+    }
+    return r.json();
+  } finally {
+    hideBusy();
+  }
+}
+
+async function loadExaminers() {
+  const rows = await apiGet("/api/admin/examiners");
+  _examiners = (Array.isArray(rows) ? rows : [])
+    .map((r) => String(r?.username || "").trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function hydrateExaminerFilter(rows) {
   const current = String(elExaminer?.value || "");
-  const names = Array.from(
-    new Set((rows || []).map((r) => String(r.examinerUsername || "").trim()).filter(Boolean))
-  ).sort((a, b) => a.localeCompare(b));
+  const names = Array.from(new Set([
+    ..._examiners,
+    ...(rows || []).map((r) => String(r.examinerUsername || "").trim()).filter(Boolean),
+  ])).sort((a, b) => a.localeCompare(b));
   if (!elExaminer) return;
   elExaminer.innerHTML = `<option value="">All examiners</option>` + names.map((x) => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join("");
   if (names.includes(current)) elExaminer.value = current;
+}
+
+function buildExaminerOptions(selectedUsername) {
+  const selected = String(selectedUsername || "").trim();
+  const names = Array.from(new Set([
+    ..._examiners,
+    selected,
+  ].filter(Boolean))).sort((a, b) => a.localeCompare(b));
+
+  if (!names.length) return `<option value="">No examiners</option>`;
+  return names.map((name) => {
+    const safe = escapeHtml(name);
+    const sel = name === selected ? " selected" : "";
+    return `<option value="${safe}"${sel}>${safe}</option>`;
+  }).join("");
 }
 
 function applyFilters() {
@@ -154,7 +203,14 @@ function renderTable() {
             </div>
           </td>
           <td>${candidate}</td>
-          <td>${examiner || "-"}</td>
+          <td>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <select class="input mono speaking-examiner-input" data-slot-id="${id}" style="min-width:180px;">
+                ${buildExaminerOptions(examiner)}
+              </select>
+              <button class="btn speaking-examiner-save-btn" data-slot-id="${id}" type="button" style="width:auto; min-width:62px; padding:8px 10px;">Save</button>
+            </div>
+          </td>
           <td>${gateUrlRaw ? `<a href="${gateUrl}" target="_blank" rel="noopener" class="mono">Open</a>` : "-"}</td>
           <td><button class="btn speaking-show-meeting-btn" data-slot-id="${id}" type="button" style="width:auto; min-width:92px;">Show</button></td>
         </tr>
@@ -239,6 +295,7 @@ async function loadRows() {
 }
 
 async function init() {
+  await loadExaminers();
   const periods = await apiGet("/api/admin/exam-periods");
   const list = Array.isArray(periods) ? periods : [];
   if (elExamPeriod) {
@@ -303,6 +360,22 @@ if (elTbody) {
         _view = (_view || []).map((x) => (Number(x.id) === slotId ? updated : x));
         renderTable();
         if (elOut) elOut.innerHTML = `<span class="ok">Slot ${slotId} updated.</span>`;
+      } catch (err) {
+        if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(err.message || String(err))}</span>`;
+      }
+      return;
+    }
+
+    const examinerSaveBtn = target.closest(".speaking-examiner-save-btn");
+    if (examinerSaveBtn) {
+      const slotId = Number(examinerSaveBtn.getAttribute("data-slot-id") || 0);
+      try {
+        if (elOut) elOut.textContent = "Saving...";
+        const updated = await saveSpeakingExaminer(slotId);
+        _rows = (_rows || []).map((x) => (Number(x.id) === slotId ? updated : x));
+        _view = (_view || []).map((x) => (Number(x.id) === slotId ? updated : x));
+        renderTable();
+        if (elOut) elOut.innerHTML = `<span class="ok">Examiner updated for slot ${slotId}.</span>`;
       } catch (err) {
         if (elOut) elOut.innerHTML = `<span class="bad">Error: ${escapeHtml(err.message || String(err))}</span>`;
       }

@@ -327,12 +327,15 @@ function createPgSpeakingHelpers(deps) {
     if (Object.prototype.hasOwnProperty.call(input, "status")) {
       next.status = String(input.status || "scheduled").trim().toLowerCase() || "scheduled";
     }
-    if (Object.prototype.hasOwnProperty.call(input, "examinerUsername")) {
+    const hasExaminerUsernameInput = Object.prototype.hasOwnProperty.call(input, "examinerUsername");
+    if (hasExaminerUsernameInput) {
       next.examinerUsername = String(input.examinerUsername || "").trim();
     }
+    let nextExaminerId = null;
     if (next.examinerUsername) {
-      const ex = await q1(`SELECT 1 FROM public.examiners WHERE username = $1 LIMIT 1;`, [next.examinerUsername]);
+      const ex = await q1(`SELECT id FROM public.examiners WHERE username = $1 LIMIT 1;`, [next.examinerUsername]);
       if (!ex) throw new Error("Invalid examiner username");
+      nextExaminerId = Number(ex.id || 0);
     }
     if (Object.prototype.hasOwnProperty.call(input, "meetingId")) next.meetingId = String(input.meetingId || "").trim();
     if (Object.prototype.hasOwnProperty.call(input, "joinUrl")) next.joinUrl = String(input.joinUrl || "").trim();
@@ -383,6 +386,24 @@ function createPgSpeakingHelpers(deps) {
       ]
     );
     if (!r.rows.length) return null;
+    if (hasExaminerUsernameInput) {
+      const sid = Number(next.sessionId);
+      if (Number.isFinite(sid) && sid > 0) {
+        if (Number.isFinite(nextExaminerId) && nextExaminerId > 0) {
+          await q(
+            `INSERT INTO public.examiner_assignments (session_id, examiner_id, assigned_at_utc_ms)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (session_id)
+             DO UPDATE SET
+               examiner_id = EXCLUDED.examiner_id,
+               assigned_at_utc_ms = EXCLUDED.assigned_at_utc_ms;`,
+            [sid, nextExaminerId, Date.now()]
+          );
+        } else {
+          await q(`DELETE FROM public.examiner_assignments WHERE session_id = $1;`, [sid]);
+        }
+      }
+    }
     const full = await getSpeakingSlotById(slotId);
     return full || normalizeSpeakingSlotRow(r.rows[0]);
   }

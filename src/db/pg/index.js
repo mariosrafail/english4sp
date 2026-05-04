@@ -84,6 +84,7 @@ let assignSessionsBalancedAcrossExaminers = async () => ({ assigned: 0 });
 let assignSingleToLeastLoadedRandomTie = async () => ({ assigned: 0 });
 let autoAssignUnassignedSessions = async () => undefined;
 let ensureSessionAssignedExaminer = async () => "";
+let setSessionAssignedExaminer = async () => null;
 
 function parseBoolEnv(name, defaultValue) {
   const raw = process.env[name];
@@ -139,6 +140,7 @@ async function q1(text, params = []) {
   assignSingleToLeastLoadedRandomTie,
   autoAssignUnassignedSessions,
   ensureSessionAssignedExaminer,
+  setSessionAssignedExaminer,
 } = createPgAssignmentHelpers({
   q,
   q1,
@@ -933,6 +935,7 @@ module.exports = {
   verifyAdmin,
   verifyExaminer,
   ensureSessionAssignedExaminer,
+  setSessionAssignedExaminer,
   getQuestionGrades,
   deleteCandidateBySessionId,
   deleteSessionById,
