@@ -54,7 +54,8 @@ async function ensureInit() {
 }
 
 async function requireGateForToken(token, res) {
-  const gate = await DB.getGateForToken(String(token || ""));
+  const t = String(token || "");
+  const gate = await DB.getGateForToken(t);
   if (!gate) {
     res.status(404).json({ error: "Invalid or expired token" });
     return true;
@@ -66,6 +67,8 @@ async function requireGateForToken(token, res) {
     return true;
   }
   if (openAtUtc && durMs && now > endAtUtc) {
+    const data = DB.getSessionForExam ? await DB.getSessionForExam(t) : null;
+    if (data?.session?.startedAtUtc) return false;
     res.status(410).json({ error: "expired", serverNow: now, openAtUtc, endAtUtc });
     return true;
   }

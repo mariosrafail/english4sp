@@ -1,4 +1,5 @@
 function createSqliteAdminTestHelpers(deps) {
+  const { normalizeGradeWeights } = require("../../utils/grading_weights");
   const {
     get,
     run,
@@ -70,6 +71,7 @@ function createSqliteAdminTestHelpers(deps) {
     return {
       version: Number(p.version || 1) || 1,
       randomize: !!p.randomize,
+      gradeWeights: normalizeGradeWeights(p.gradeWeights),
       sections,
     };
   }

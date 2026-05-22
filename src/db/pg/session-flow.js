@@ -12,16 +12,37 @@ function createPgSessionFlowHelpers(deps) {
     getAdminTest,
   } = deps || {};
 
+  const PERSONAL_EXAM_DURATION_MS = 60 * 60 * 1000;
+
+  function buildPersonalEndAtUtc(startedAtUtc, personalEndAtUtc) {
+    const started = Number(startedAtUtc || 0);
+    const personalEnd = Number(personalEndAtUtc || 0);
+    if (Number.isFinite(personalEnd) && personalEnd > 0) return personalEnd;
+    if (Number.isFinite(started) && started > 0) return started + PERSONAL_EXAM_DURATION_MS;
+    return null;
+  }
+
   async function createSession({ candidateName }) {
-    const token = makeToken(10);
     const name = String(candidateName || "Candidate").trim() || "Candidate";
-    const r = await q(
-      `INSERT INTO public.sessions (token, name, submitted)
-       VALUES ($1, $2, FALSE)
-       RETURNING id`,
-      [token, name]
-    );
-    return { token, sessionId: r.rows[0].id };
+    let token = makeToken(10);
+    for (let i = 0; i < 6; i++) {
+      try {
+        const r = await q(
+          `INSERT INTO public.sessions (token, name, submitted)
+           VALUES ($1, $2, FALSE)
+           RETURNING id`,
+          [token, name]
+        );
+        return { token, sessionId: r.rows[0].id };
+      } catch (e) {
+        if (e && e.code === "23505") {
+          token = makeToken(10);
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new Error("Could not generate a unique session token");
   }
 
   async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even", onProgress } = {}) {
@@ -445,6 +466,7 @@ function createPgSessionFlowHelpers(deps) {
     const r = await q(
       `SELECT s.id, s.token, s.name, s.submitted,
               COALESCE(s.disqualified, FALSE) AS disqualified,
+              s.started_at_utc_ms, s.personal_end_at_utc_ms,
               qg.total_grade AS total_grade,
               (pa.session_id IS NOT NULL) AS proctoring_acked,
               s.exam_period_id,
@@ -462,6 +484,8 @@ function createPgSessionFlowHelpers(deps) {
 
     const openAtUtc = Number(s.open_at_utc_ms);
     const durationMinutes = Number(s.duration_minutes);
+    const startedAtUtc = Number(s.started_at_utc_ms || 0) || null;
+    const personalEndAtUtc = buildPersonalEndAtUtc(startedAtUtc, s.personal_end_at_utc_ms);
 
     const payload = payloadForClientFromFull(await getAdminTest(Number(s.exam_period_id) || 1));
     try {
@@ -481,6 +505,8 @@ function createPgSessionFlowHelpers(deps) {
         candidateName: s.name,
         submitted: !!s.submitted,
         disqualified: !!s.disqualified,
+        startedAtUtc,
+        personalEndAtUtc,
         proctoringAcked: !!s.proctoring_acked,
         grade: s.total_grade === null || s.total_grade === undefined ? null : Number(s.total_grade),
         examPeriodId: Number(s.exam_period_id) || 1,
@@ -526,11 +552,22 @@ function createPgSessionFlowHelpers(deps) {
   }
 
   async function startSession(token) {
-    const r = await q(`SELECT submitted FROM public.sessions WHERE token = $1`, [token]);
-    const s = r.rows[0];
+    const now = Date.now();
+    const s = await q1(
+      `UPDATE public.sessions
+       SET started_at_utc_ms = COALESCE(started_at_utc_ms, $2),
+           personal_end_at_utc_ms = COALESCE(personal_end_at_utc_ms, COALESCE(started_at_utc_ms, $2) + $3)
+       WHERE token = $1
+       RETURNING submitted, started_at_utc_ms, personal_end_at_utc_ms;`,
+      [token, now, PERSONAL_EXAM_DURATION_MS]
+    );
     if (!s) return null;
-    if (s.submitted) return { status: "submitted" };
-    return { status: "started" };
+    return {
+      status: s.submitted ? "submitted" : "started",
+      startedAtUtc: Number(s.started_at_utc_ms || 0) || null,
+      personalEndAtUtc: buildPersonalEndAtUtc(s.started_at_utc_ms, s.personal_end_at_utc_ms),
+      serverNow: now,
+    };
   }
 
   async function gradeAttempt({ examPeriodId, answers }) {
@@ -591,9 +628,10 @@ function createPgSessionFlowHelpers(deps) {
     await q(
       `UPDATE sessions
        SET submitted = TRUE,
+           submitted_at_utc_ms = COALESCE(submitted_at_utc_ms, $3),
            disqualified = CASE WHEN $2::boolean THEN TRUE ELSE COALESCE(disqualified, FALSE) END
        WHERE id = $1`,
-      [s.id, isDisqualified]
+      [s.id, isDisqualified, Date.now()]
     );
 
     const payload = await getAdminTest(Number(s.exam_period_id) || 1);
@@ -651,6 +689,7 @@ function createPgSessionFlowHelpers(deps) {
           qg.speaking_grade AS "speakingGrade",
           qg.writing_grade AS "writingGrade",
           s.exam_period_id AS "examPeriodId",
+          COALESCE(s.submitted_at_utc_ms, qg.created_at_utc_ms, 0) AS "submittedAtUtcMs",
           COALESCE(ep.name, CONCAT('Exam Period ', s.exam_period_id::text)) AS "examPeriodName"
        FROM public.sessions s
        JOIN public.examiner_assignments ea ON ea.session_id = s.id

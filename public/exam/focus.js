@@ -6,6 +6,7 @@ export function createExamFocusHelpers(ctx){
     setTabViolations,
     MAX_TAB_VIOLATIONS,
     pingPresence,
+    logSecurityEvent,
     scheduleReturnSnapshot,
     clearReturnSnapshotTimer,
     showTabToast,
@@ -62,6 +63,7 @@ export function createExamFocusHelpers(ctx){
         clearReturnSnapshotTimer();
         lastHiddenAt = Date.now();
         await pingPresence("tab_hidden");
+        if (logSecurityEvent) await logSecurityEvent("tab_hidden", { timestamp: lastHiddenAt });
       }else{
         const awayMs = lastHiddenAt ? (Date.now() - lastHiddenAt) : 0;
         lastHiddenAt = 0;
@@ -73,6 +75,8 @@ export function createExamFocusHelpers(ctx){
       if (!getExamStarted()) return;
       clearReturnSnapshotTimer();
       lastBlurAt = Date.now();
+      // Window blur/focus is noisy on mobile and with OS UI such as virtual keyboards.
+      // Keep it as a lightweight presence ping, but do not warn/log it as a writing security event.
       await pingPresence("window_blur");
     });
 
@@ -82,11 +86,6 @@ export function createExamFocusHelpers(ctx){
       lastBlurAt = 0;
       if (awayMs > 0 && !document.hidden){
         await pingPresence("window_focus_warning");
-        showTabToast(
-          "Keep the exam on your active screen.",
-          "If you are using a second monitor, disconnect it and continue on one display only.",
-          3000
-        );
       }
     });
 

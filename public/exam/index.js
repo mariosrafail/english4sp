@@ -237,6 +237,7 @@ import { createExamFocusHelpers } from "/exam/focus.js";
 
   let fullscreenRequired = false;
   let isFullscreen = ()=> false;
+  let isFullscreenGraceActive = ()=> false;
   let requestFullscreen = async ()=>{};
   let exitFullscreen = async ()=>{};
   let showLock = ()=>{};
@@ -246,6 +247,29 @@ import { createExamFocusHelpers } from "/exam/focus.js";
 
   async function pingPresence(status){
     try { await apiPost(`/api/session/${encodeURIComponent(token)}/presence`, { status }); } catch(e){}
+  }
+
+  async function logSecurityEvent(eventType, payload = {}){
+    try {
+      const session = sessionData?.session || {};
+      const body = {
+        eventType,
+        payload: {
+          ...(payload && typeof payload === "object" ? payload : {}),
+          examId: Number(session.examPeriodId || 0) || null,
+          sessionId: Number(session.id || 0) || null,
+          clientTimestamp: Date.now(),
+          sectionIndex: currentSectionIdx,
+        },
+      };
+      await fetch(`/api/session/${encodeURIComponent(token)}/security-event`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "same-origin",
+        keepalive: true,
+        body: JSON.stringify(body),
+      });
+    } catch(e){}
   }
 
   let hasExtendedDisplay = ()=> false;
@@ -290,6 +314,7 @@ import { createExamFocusHelpers } from "/exam/focus.js";
   ({
     fullscreenRequired,
     isFullscreen,
+    isFullscreenGraceActive,
     requestFullscreen,
     exitFullscreen,
     hasExtendedDisplay,
@@ -340,6 +365,7 @@ import { createExamFocusHelpers } from "/exam/focus.js";
     isProctoringAckSatisfied: ()=> isProctoringAckSatisfied(),
     fullscreenRequired: ()=> fullscreenRequired,
     isFullscreen: ()=> isFullscreen(),
+    isFullscreenGraceActive: ()=> isFullscreenGraceActive(),
     hasExtendedDisplay: ()=> hasExtendedDisplay(),
     clearReturnSnapshotTimer: ()=> clearReturnSnapshotTimer(),
     scheduleReturnSnapshot: (reason, delayMs)=> scheduleReturnSnapshot(reason, delayMs),
@@ -503,6 +529,7 @@ import { createExamFocusHelpers } from "/exam/focus.js";
     setTabViolations: (value)=> { tabViolations = value; },
     MAX_TAB_VIOLATIONS,
     pingPresence,
+    logSecurityEvent,
     scheduleReturnSnapshot: (reason, delayMs)=> scheduleReturnSnapshot(reason, delayMs),
     clearReturnSnapshotTimer: ()=> clearReturnSnapshotTimer(),
     showTabToast: (title, body, ms)=> showTabToast(title, body, ms),
@@ -525,6 +552,7 @@ import { createExamFocusHelpers } from "/exam/focus.js";
       registerCanvasTextBlock,
       clearCanvasTextBlocks,
       queueCanvasTextRender,
+      logSecurityEvent,
       getSectionKind,
       showSection,
       saveAnswers,

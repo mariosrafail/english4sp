@@ -258,6 +258,60 @@ function createPgProctoringHelpers(deps) {
     return { ok: true, sessionId: Number(row.sessionId), examPeriodId: Number(row.examPeriodId) || 1, expiresAtUtcMs: exp };
   }
 
+  async function addExamSecurityEvent(token, { eventType, payload } = {}) {
+    const t = String(token || "").trim();
+    const type = String(eventType || "").trim().slice(0, 80);
+    if (!t || !type) return null;
+    const s = await q1(
+      `SELECT id, exam_period_id, candidate_id
+       FROM public.sessions
+       WHERE token = $1
+       LIMIT 1;`,
+      [t]
+    );
+    if (!s) return null;
+
+    const rawPayload = payload && typeof payload === "object" ? payload : {};
+    const safePayload = JSON.stringify(rawPayload).slice(0, 12000);
+    const r = await q(
+      `INSERT INTO public.exam_security_events
+         (session_id, exam_period_id, candidate_id, event_type, payload_json, created_at_utc_ms)
+       VALUES ($1, $2, $3, $4, $5::jsonb, $6)
+       RETURNING id;`,
+      [
+        Number(s.id),
+        Number(s.exam_period_id || 0) || null,
+        s.candidate_id === null || s.candidate_id === undefined ? null : Number(s.candidate_id),
+        type,
+        safePayload,
+        Date.now(),
+      ]
+    );
+    return { ok: true, id: Number(r?.rows?.[0]?.id || 0) || null };
+  }
+
+  async function listExamSecurityEvents({ sessionId, limit = 200 } = {}) {
+    const sid = Number(sessionId);
+    if (!Number.isFinite(sid) || sid <= 0) return [];
+    const lim = Number(limit);
+    const n = Number.isFinite(lim) && lim > 0 ? Math.min(1000, Math.round(lim)) : 200;
+    const r = await q(
+      `SELECT id,
+              session_id AS "sessionId",
+              exam_period_id AS "examPeriodId",
+              candidate_id AS "candidateId",
+              event_type AS "eventType",
+              payload_json AS payload,
+              created_at_utc_ms AS "createdAtUtcMs"
+       FROM public.exam_security_events
+       WHERE session_id = $1
+       ORDER BY id DESC
+       LIMIT $2;`,
+      [sid, n]
+    );
+    return Array.isArray(r?.rows) ? r.rows : [];
+  }
+
   return {
     hasProctoringAck,
     recordProctoringAck,
@@ -268,6 +322,8 @@ function createPgProctoringHelpers(deps) {
     listSnapshotSessions,
     issueListeningTicket,
     verifyListeningTicket,
+    addExamSecurityEvent,
+    listExamSecurityEvents,
   };
 }
 

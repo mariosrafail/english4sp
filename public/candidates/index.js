@@ -90,6 +90,34 @@ function cleanPromptText(s) {
   return v.replace(/^\s*\d+\s*[.)]\s*/, "");
 }
 
+function formatSecurityEventTime(ms) {
+  const n = Number(ms || 0);
+  if (!Number.isFinite(n) || n <= 0) return "-";
+  try {
+    return new Date(n).toLocaleString(undefined, {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+  } catch {
+    return "-";
+  }
+}
+
+function securityEventDetailsHtml(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const pairs = [];
+  for (const key of ["qid", "fieldName", "reason", "key", "previousSelectionStart", "previousSelectionEnd", "previousLength", "newLength", "addedCharacterCount", "inputType", "awayMs"]) {
+    if (p[key] === undefined || p[key] === null || p[key] === "") continue;
+    pairs.push(`${key}: ${String(p[key])}`);
+  }
+  return pairs.length ? escapeHtml(pairs.join(" | ")) : '<span class="muted">-</span>';
+}
+
 let _scrollLocked = false;
 let _savedBodyOverflow = "";
 let _savedWrapScrollTop = 0;
@@ -693,6 +721,8 @@ elTbody.addEventListener("click", async (ev) => {
 
       const items = Array.isArray(j.items) ? j.items : [];
       const tableItems = items.filter((it) => String(it?.id || "") !== "q4");
+      const securityEvents = (Array.isArray(j.securityEvents) ? j.securityEvents : [])
+        .filter((ev) => !["window_blur", "window_focus"].includes(String(ev?.eventType || "")));
       const rowsHtml = tableItems.map((it) => {
         let status = '<span class="muted">N/A</span>';
         if (it.isCorrect === true) status = '<span class="ok">Correct</span>';
@@ -707,6 +737,13 @@ elTbody.addEventListener("click", async (ev) => {
           </tr>
         `;
       }).join("");
+      const securityRowsHtml = securityEvents.map((ev) => `
+        <tr>
+          <td><span class="mono">${escapeHtml(formatSecurityEventTime(ev.createdAtUtcMs))}</span></td>
+          <td><span class="mono">${escapeHtml(String(ev.eventType || ""))}</span></td>
+          <td>${securityEventDetailsHtml(ev.payload)}</td>
+        </tr>
+      `).join("");
 
       if (elReviewBody) {
         const bodyHtml = `
@@ -732,6 +769,20 @@ elTbody.addEventListener("click", async (ev) => {
           </div>
           <div class="small" style="margin-top:4px">
             Speaking grade: <span class="mono">${escapeHtml(speakingGradeText)}</span>
+          </div>
+          <div class="hr"></div>
+          <h3 style="margin:0 0 8px 0">Writing Security Log</h3>
+          <div style="overflow:auto">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Event type</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>${securityRowsHtml || `<tr><td colspan="3" class="muted">No writing security events</td></tr>`}</tbody>
+            </table>
           </div>
         `;
         elReviewBody.innerHTML = bodyHtml;

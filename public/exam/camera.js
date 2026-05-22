@@ -10,6 +10,7 @@ export function createExamCameraHelpers(ctx){
     isProctoringAckSatisfied,
     fullscreenRequired,
     isFullscreen,
+    isFullscreenGraceActive,
     hasExtendedDisplay,
     clearReturnSnapshotTimer,
     scheduleReturnSnapshot,
@@ -467,6 +468,14 @@ export function createExamCameraHelpers(ctx){
       if (fullscreenRequired()) {
         const fsOk = isFullscreen();
         if (!fsOk){
+          if (typeof isFullscreenGraceActive === "function" && isFullscreenGraceActive()){
+            fsMissingSince = 0;
+            fsWasOff = false;
+            if (elCamMiniText) elCamMiniText.textContent = "Checking...";
+            if (elCamMiniDot) elCamMiniDot.classList.remove("ok");
+            hideLock(true);
+            return;
+          }
           if (!fsWasOff) {
             fsWasOff = true;
             clearReturnSnapshotTimer();
@@ -553,11 +562,11 @@ export function createExamCameraHelpers(ctx){
         if (!missingSince) missingSince = Date.now();
         const missMs = Date.now() - missingSince;
         const leftS = Math.max(0, Math.ceil((FACE_MISSING_AUTO_SUBMIT_MS - missMs) / 1000));
-        if (elCamMiniText) elCamMiniText.textContent = `No face (${leftS}s)`;
+        if (elCamMiniText) elCamMiniText.textContent = `Look at screen (${leftS}s)`;
         if (elCamMiniDot) elCamMiniDot.classList.remove("ok");
         showLock(
-          "Please keep your face inside the camera frame. You have 10 seconds.",
-          `Time remaining: ${leftS} seconds`
+          "Look at the screen.",
+          `Please keep your face inside the camera frame. Time remaining: ${leftS} seconds`
         );
 
         if (missMs >= 3000 && (Date.now() - lastViolationAt) > 4000){

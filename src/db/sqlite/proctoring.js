@@ -84,6 +84,64 @@ function createSqliteProctoringHelpers(deps) {
     return { ok: true, sessionId: Number(row.sessionId), examPeriodId: Number(row.examPeriodId) || 1, expiresAtUtcMs: exp };
   }
 
+  async function addExamSecurityEvent(token, { eventType, payload } = {}) {
+    const t = String(token || "").trim();
+    const type = String(eventType || "").trim().slice(0, 80);
+    if (!t || !type) return null;
+    const s = await get(
+      `SELECT id, exam_period_id, candidate_id
+       FROM sessions
+       WHERE token = ?
+       ORDER BY id DESC
+       LIMIT 1;`,
+      [t]
+    );
+    if (!s) return null;
+
+    const rawPayload = payload && typeof payload === "object" ? payload : {};
+    const safePayload = JSON.stringify(rawPayload).slice(0, 12000);
+    const out = await run(
+      `INSERT INTO exam_security_events
+         (session_id, exam_period_id, candidate_id, event_type, payload_json, created_at_utc_ms)
+       VALUES (?, ?, ?, ?, ?, ?);`,
+      [
+        Number(s.id),
+        Number(s.exam_period_id || 0) || null,
+        s.candidate_id === null || s.candidate_id === undefined ? null : Number(s.candidate_id),
+        type,
+        safePayload,
+        Date.now(),
+      ]
+    );
+    return { ok: true, id: Number(out?.lastID || 0) || null };
+  }
+
+  async function listExamSecurityEvents({ sessionId, limit = 200 } = {}) {
+    const sid = Number(sessionId);
+    if (!Number.isFinite(sid) || sid <= 0) return [];
+    const lim = Number(limit);
+    const n = Number.isFinite(lim) && lim > 0 ? Math.min(1000, Math.round(lim)) : 200;
+    const rows = await all(
+      `SELECT id,
+              session_id AS sessionId,
+              exam_period_id AS examPeriodId,
+              candidate_id AS candidateId,
+              event_type AS eventType,
+              payload_json AS payload,
+              created_at_utc_ms AS createdAtUtcMs
+       FROM exam_security_events
+       WHERE session_id = ?
+       ORDER BY id DESC
+       LIMIT ?;`,
+      [sid, n]
+    );
+    return Array.isArray(rows) ? rows.map((r) => {
+      let payload = {};
+      try { payload = JSON.parse(String(r.payload || "{}")); } catch {}
+      return { ...r, payload };
+    }) : [];
+  }
+
   async function hasProctoringAck(token) {
     const t = String(token || "").trim();
     if (!t) return false;
@@ -253,6 +311,8 @@ function createSqliteProctoringHelpers(deps) {
   return {
     issueListeningTicket,
     verifyListeningTicket,
+    addExamSecurityEvent,
+    listExamSecurityEvents,
     hasProctoringAck,
     recordProctoringAck,
     addSessionSnapshot,

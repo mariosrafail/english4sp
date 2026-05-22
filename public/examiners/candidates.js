@@ -4,6 +4,7 @@ const elQ = qs("#q");
 const elClear = qs("#clear");
 const elOnlyDone = qs("#onlyDone");
 const elOnlyDisq = qs("#onlyDisq");
+const elSortMode = qs("#sortMode");
 const elExamPeriod = qs("#examPeriod");
 
 const elTbody = qs("#tbody");
@@ -132,10 +133,43 @@ function mergeRowsWithSpeaking(rows) {
   });
 }
 
+function hasCompleteGrades(row) {
+  return row?.speakingGrade !== null &&
+    row?.speakingGrade !== undefined &&
+    row?.speakingGrade !== "" &&
+    row?.writingGrade !== null &&
+    row?.writingGrade !== undefined &&
+    row?.writingGrade !== "";
+}
+
+function gradingPriority(row) {
+  if (!!row?.submitted && !row?.disqualified && !hasCompleteGrades(row)) return 0;
+  if (!hasCompleteGrades(row)) return 1;
+  return 2;
+}
+
 function applySort(rows) {
-  // Always sort by ascending ID.
   const out = [...rows];
-  out.sort((a, b) => Number(a.sessionId || 0) - Number(b.sessionId || 0));
+  const byIdAsc = (a, b) => Number(a.sessionId || 0) - Number(b.sessionId || 0);
+  const mode = String(elSortMode?.value || "id_asc");
+
+  if (mode === "ungraded_first") {
+    out.sort((a, b) => {
+      return gradingPriority(a) - gradingPriority(b) || byIdAsc(a, b);
+    });
+    return out;
+  }
+
+  if (mode === "recent_submit") {
+    out.sort((a, b) => {
+      const at = Number(a.submittedAtUtcMs || 0);
+      const bt = Number(b.submittedAtUtcMs || 0);
+      return bt - at || Number(b.sessionId || 0) - Number(a.sessionId || 0);
+    });
+    return out;
+  }
+
+  out.sort(byIdAsc);
   return out;
 }
 
@@ -388,6 +422,7 @@ elTbody.addEventListener("click", async (ev) => {
       row.writingGrade = out?.writingGrade ?? row.writingGrade;
     }
     btn.classList.add("saved");
+    applyFilters(false);
   } catch (e) {
     btn.classList.add("error");
     await uiAlert(String(e.message || e), { title: "Save Error" });
@@ -436,6 +471,9 @@ async function autoRefresh() {
           Number(a.sessionId) !== Number(b.sessionId) ||
           (a.speakingGrade ?? null) !== (b.speakingGrade ?? null) ||
           (a.writingGrade ?? null) !== (b.writingGrade ?? null) ||
+          Number(a.submittedAtUtcMs || 0) !== Number(b.submittedAtUtcMs || 0) ||
+          !!a.submitted !== !!b.submitted ||
+          !!a.disqualified !== !!b.disqualified ||
           String(a.qWriting ?? "") !== String(b.qWriting ?? "") ||
           Number(a.speakingStartUtcMs || 0) !== Number(b.speakingStartUtcMs || 0) ||
           String(a.speakingJoinUrl || "") !== String(b.speakingJoinUrl || "")
@@ -483,6 +521,7 @@ elQ.addEventListener("input", scheduleApply);
 elQ.addEventListener("search", scheduleApply);
 elOnlyDone?.addEventListener("change", scheduleApply);
 elOnlyDisq?.addEventListener("change", scheduleApply);
+elSortMode?.addEventListener("change", scheduleApply);
 elExamPeriod?.addEventListener("change", scheduleApply);
 
 elClear.addEventListener("click", () => {

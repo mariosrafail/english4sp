@@ -10,6 +10,16 @@ function createSqliteSessionFlowHelpers(deps) {
     defaultDurationMinutes,
   } = deps;
 
+  const PERSONAL_EXAM_DURATION_MS = 60 * 60 * 1000;
+
+  function buildPersonalEndAtUtc(startedAtUtc, personalEndAtUtc) {
+    const started = Number(startedAtUtc || 0);
+    const personalEnd = Number(personalEndAtUtc || 0);
+    if (Number.isFinite(personalEnd) && personalEnd > 0) return personalEnd;
+    if (Number.isFinite(started) && started > 0) return started + PERSONAL_EXAM_DURATION_MS;
+    return null;
+  }
+
   function makeToken() {
     return (
       Math.random().toString(36).slice(2, 8).toUpperCase() +
@@ -18,16 +28,28 @@ function createSqliteSessionFlowHelpers(deps) {
   }
 
   async function createSession({ candidateName, examPeriodId = 1 }) {
-    const token = makeToken();
     const name = String(candidateName || "Candidate").trim() || "Candidate";
     const ep = Number(examPeriodId) || 1;
 
-    const r = await run(
-      `INSERT INTO sessions (exam_period_id, token, name, submitted) VALUES (?, ?, ?, 0)`,
-      [ep, token, name]
-    );
-    const sessionId = Number(r && (r.lastID ?? r.lastId));
-    return { token, sessionId };
+    let token = makeToken();
+    for (let i = 0; i < 6; i++) {
+      try {
+        const r = await run(
+          `INSERT INTO sessions (exam_period_id, token, name, submitted) VALUES (?, ?, ?, 0)`,
+          [ep, token, name]
+        );
+        const sessionId = Number(r && (r.lastID ?? r.lastId));
+        return { token, sessionId };
+      } catch (e) {
+        const msg = String(e?.message || "");
+        if (/UNIQUE|constraint/i.test(msg)) {
+          token = makeToken();
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw new Error("Could not generate a unique session token");
   }
 
   async function importCandidatesAndCreateSessions({ rows, examPeriodId, assignmentStrategy = "batch_even", onProgress } = {}) {
@@ -236,6 +258,7 @@ function createSqliteSessionFlowHelpers(deps) {
 
     const row = await get(
       `SELECT s.id, s.token, s.name, s.submitted, COALESCE(s.disqualified, 0) AS disqualified,
+              s.started_at_utc_ms, s.personal_end_at_utc_ms,
               s.exam_period_id AS exam_period_id,
               q.total_grade AS total_grade,
               EXISTS(SELECT 1 FROM proctoring_acks pa WHERE pa.session_id = s.id) AS proctoring_acked
@@ -263,6 +286,9 @@ function createSqliteSessionFlowHelpers(deps) {
       }
     } catch {}
 
+    const startedAtUtc = Number(row.started_at_utc_ms || 0) || null;
+    const personalEndAtUtc = buildPersonalEndAtUtc(startedAtUtc, row.personal_end_at_utc_ms);
+
     return {
       session: {
         id: Number(row.id),
@@ -270,6 +296,8 @@ function createSqliteSessionFlowHelpers(deps) {
         candidateName: String(row.name || ""),
         submitted: Number(row.submitted) === 1,
         disqualified: Number(row.disqualified) === 1,
+        startedAtUtc,
+        personalEndAtUtc,
         proctoringAcked: Number(row.proctoring_acked) === 1,
         grade: row.total_grade === null || row.total_grade === undefined ? null : Number(row.total_grade),
         examPeriodId: Number(row.exam_period_id) || 1,
@@ -287,10 +315,46 @@ function createSqliteSessionFlowHelpers(deps) {
   async function startSession(token) {
     const t = String(token || "").trim();
     if (!t) return null;
-    const s = await get(`SELECT submitted FROM sessions WHERE token = ? ORDER BY id DESC LIMIT 1;`, [t]);
+    const s = await get(
+      `SELECT id, submitted, started_at_utc_ms, personal_end_at_utc_ms
+       FROM sessions
+       WHERE token = ?
+       ORDER BY id DESC
+       LIMIT 1;`,
+      [t]
+    );
     if (!s) return null;
-    if (Number(s.submitted) === 1) return { status: "submitted" };
-    return { status: "started" };
+    const serverNow = Date.now();
+    if (Number(s.submitted) === 1) {
+      return {
+        status: "submitted",
+        startedAtUtc: Number(s.started_at_utc_ms || 0) || null,
+        personalEndAtUtc: buildPersonalEndAtUtc(s.started_at_utc_ms, s.personal_end_at_utc_ms),
+        serverNow,
+      };
+    }
+
+    let startedAtUtc = Number(s.started_at_utc_ms || 0) || null;
+    let personalEndAtUtc = buildPersonalEndAtUtc(startedAtUtc, s.personal_end_at_utc_ms);
+    if (!startedAtUtc) {
+      startedAtUtc = serverNow;
+      personalEndAtUtc = startedAtUtc + PERSONAL_EXAM_DURATION_MS;
+      await run(
+        `UPDATE sessions
+         SET started_at_utc_ms = ?, personal_end_at_utc_ms = ?
+         WHERE id = ? AND started_at_utc_ms IS NULL;`,
+        [startedAtUtc, personalEndAtUtc, s.id]
+      );
+    } else if (!Number(s.personal_end_at_utc_ms || 0)) {
+      await run(
+        `UPDATE sessions
+         SET personal_end_at_utc_ms = ?
+         WHERE id = ? AND personal_end_at_utc_ms IS NULL;`,
+        [personalEndAtUtc, s.id]
+      );
+    }
+
+    return { status: "started", startedAtUtc, personalEndAtUtc, serverNow };
   }
 
   async function ensureSessionAssignedExaminer(_opts = {}) {
@@ -389,13 +453,13 @@ function createSqliteSessionFlowHelpers(deps) {
   }
 
   async function submitAnswers(token, answers) {
-    const s = await get(`SELECT id, submitted, exam_period_id FROM sessions WHERE token = ? ORDER BY s.id DESC LIMIT 1`, [token]);
+    const s = await get(`SELECT id, submitted, exam_period_id FROM sessions WHERE token = ? ORDER BY id DESC LIMIT 1`, [token]);
     if (!s) return null;
     if (s.submitted) return { status: "submitted" };
 
     const normAnswers = normalizeAnswers(answers);
 
-    await run(`UPDATE sessions SET submitted = 1 WHERE id = ?`, [s.id]);
+    await run(`UPDATE sessions SET submitted = 1, submitted_at_utc_ms = COALESCE(submitted_at_utc_ms, ?) WHERE id = ?`, [Date.now(), s.id]);
 
     const payload = await getAdminTest(Number(s.exam_period_id) || 1);
 
@@ -469,9 +533,11 @@ function createSqliteSessionFlowHelpers(deps) {
            COALESCE(epd.name, 'Exam Period ' || s.exam_period_id) AS examPeriodName,
            s.token,
            s.submitted,
+           COALESCE(s.disqualified, 0) AS disqualified,
            COALESCE(q.q_writing, '') AS qWriting,
            q.speaking_grade AS speakingGrade,
-           q.writing_grade AS writingGrade
+           q.writing_grade AS writingGrade,
+           COALESCE(s.submitted_at_utc_ms, q.created_at_utc_ms, 0) AS submittedAtUtcMs
          FROM sessions s
          LEFT JOIN question_grades q ON q.session_id = s.id
          LEFT JOIN exam_periods epd ON epd.id = s.exam_period_id
@@ -484,9 +550,11 @@ function createSqliteSessionFlowHelpers(deps) {
            COALESCE(epd.name, 'Exam Period ' || s.exam_period_id) AS examPeriodName,
            s.token,
            s.submitted,
+           COALESCE(s.disqualified, 0) AS disqualified,
            COALESCE(q.q_writing, '') AS qWriting,
            q.speaking_grade AS speakingGrade,
-           q.writing_grade AS writingGrade
+           q.writing_grade AS writingGrade,
+           COALESCE(s.submitted_at_utc_ms, q.created_at_utc_ms, 0) AS submittedAtUtcMs
          FROM sessions s
          LEFT JOIN question_grades q ON q.session_id = s.id
          LEFT JOIN exam_periods epd ON epd.id = s.exam_period_id

@@ -198,6 +198,42 @@
 .q{border:var(--border);border-radius:var(--radius);padding:14px;background:#fff;margin:12px 0;transition:border-color 160ms ease}
 .q:hover{border-color:rgba(17,24,39,0.18)}
 .q-title{font-weight:800;margin:0 0 8px 0; white-space: pre-line}
+textarea{
+  -webkit-text-size-adjust:100%;
+}
+.writingTextarea{
+  min-height:220px;
+  resize:vertical;
+}
+.writingWordCounter{
+  margin:4px 0 8px 0;
+  font-size:12px;
+  font-weight:800;
+  color:var(--muted);
+}
+.writingSecurityToast{
+  display:none;
+  position:fixed;
+  left:50%;
+  top:18px;
+  transform:translateX(-50%);
+  z-index:10040;
+  width:min(520px, calc(100vw - 28px));
+  padding:11px 14px;
+  border-radius:10px;
+  border:1px solid rgba(239,68,68,0.42);
+  background:rgba(153,27,27,0.96);
+  color:#fff;
+  font-size:13px;
+  font-weight:900;
+  line-height:1.3;
+  text-align:center;
+  box-shadow:0 14px 34px rgba(17,24,39,0.28);
+  pointer-events:none;
+}
+.writingSecurityToast.show{
+  display:block;
+}
 
 /* Choice as selectable card */
 .choice{

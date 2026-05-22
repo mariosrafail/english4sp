@@ -27,6 +27,9 @@ function createAdminCandidateReviewHelpers(deps) {
     const payload = DB.getAdminTest ? await DB.getAdminTest(examPeriodId) : getTestPayloadFull();
     const answersObj = parseAnswersJson(qg.answersJson);
     const review = buildReviewItems(payload, answersObj);
+    const securityEvents = DB.listExamSecurityEvents
+      ? await DB.listExamSecurityEvents({ sessionId: sid, limit: 300 })
+      : [];
 
     return {
       ok: true,
@@ -41,6 +44,7 @@ function createAdminCandidateReviewHelpers(deps) {
         objectiveEarned: review.objectiveEarned,
         objectiveMax: review.objectiveMax,
         items: review.items,
+        securityEvents: Array.isArray(securityEvents) ? securityEvents : [],
       },
     };
   }

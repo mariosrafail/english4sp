@@ -177,12 +177,15 @@ module.exports = function registerSessionRoutes(app, ctx) {
     if (openAtUtc && now < openAtUtc) {
       return res.json({ status: "countdown", serverNow: now, openAtUtc, endAtUtc });
     }
+    const data = await DB.getSessionForExam(String(req.params.token || ""));
+    if (!data) return res.status(404).json({ error: "Invalid or expired token" });
     if (openAtUtc && endAtUtc && now > endAtUtc) {
+      if (data?.session?.startedAtUtc) {
+        return res.json({ status: "running", ...data, serverNow: now, openAtUtc, endAtUtc });
+      }
       return res.json({ status: "ended", serverNow: now, openAtUtc, endAtUtc });
     }
 
-    const data = await DB.getSessionForExam(String(req.params.token || ""));
-    if (!data) return res.status(404).json({ error: "Invalid or expired token" });
     res.json({ status: "running", ...data, serverNow: now, openAtUtc, endAtUtc });
   });
 
@@ -360,6 +363,19 @@ module.exports = function registerSessionRoutes(app, ctx) {
     await ensureInit();
     if (await requireGateForToken(req.params.token, res)) return;
     const out = await DB.presencePing(String(req.params.token || ""), req.body?.status || "unknown");
+    res.json(out);
+  });
+
+  app.post("/api/session/:token/security-event", async (req, res) => {
+    await ensureInit();
+    if (await requireGateForToken(req.params.token, res)) return;
+    if (!DB.addExamSecurityEvent) return res.status(501).json({ error: "Not supported on this database adapter" });
+
+    const eventType = String(req.body?.eventType || "").trim();
+    if (!eventType) return res.status(400).json({ error: "missing_event_type" });
+    const payload = req.body?.payload && typeof req.body.payload === "object" ? req.body.payload : {};
+    const out = await DB.addExamSecurityEvent(String(req.params.token || ""), { eventType, payload });
+    if (!out) return res.status(404).json({ error: "Invalid or expired token" });
     res.json(out);
   });
 

@@ -94,8 +94,67 @@ export function createExamFlowHelpers(ctx){
     LS_KEY,
   } = ctx || {};
 
+  const PERSONAL_EXAM_DURATION_MS = 60 * 60 * 1000;
+  const RANDOM_SNAPSHOT_COUNT_MIN = 2;
+  const RANDOM_SNAPSHOT_COUNT_MAX = 3;
+  const randomSnapshotTimers = [];
+
+  function clearRandomSnapshotTimers(){
+    while (randomSnapshotTimers.length) {
+      const id = randomSnapshotTimers.pop();
+      try { clearTimeout(id); } catch {}
+    }
+  }
+
+  function buildRandomSnapshotSchedule(endAtUtcMs, nowServer){
+    const now = Number(typeof nowServer === "function" ? nowServer() : Date.now());
+    const end = Number(endAtUtcMs || 0);
+    if (!Number.isFinite(now) || !Number.isFinite(end) || end <= now + 90_000) return [];
+
+    const duration = end - now;
+    const count = RANDOM_SNAPSHOT_COUNT_MIN + (Math.random() < 0.5 ? 0 : (RANDOM_SNAPSHOT_COUNT_MAX - RANDOM_SNAPSHOT_COUNT_MIN));
+    const minOffset = Math.min(120_000, Math.max(30_000, Math.floor(duration * 0.12)));
+    const maxOffset = Math.max(minOffset + 30_000, duration - 60_000);
+    const slots = [];
+    for (let i = 0; i < count; i++) {
+      const bandStart = minOffset + ((maxOffset - minOffset) * i / count);
+      const bandEnd = minOffset + ((maxOffset - minOffset) * (i + 1) / count);
+      const offset = Math.round(bandStart + Math.random() * Math.max(1, bandEnd - bandStart));
+      slots.push(now + offset);
+    }
+    return slots.sort((a, b) => a - b);
+  }
+
+  function scheduleRandomSnapshots(endAtUtcMs, nowServer){
+    clearRandomSnapshotTimers();
+    const key = LS_KEY("randomSnapshots_v1");
+    const now = Number(typeof nowServer === "function" ? nowServer() : Date.now());
+    let schedule = [];
+    let hadStoredSchedule = false;
+    try {
+      const raw = localStorage.getItem(key);
+      hadStoredSchedule = raw !== null && raw !== undefined && String(raw || "").trim() !== "";
+      const parsed = JSON.parse(String(raw || "[]"));
+      if (Array.isArray(parsed)) schedule = parsed.map(Number).filter((n) => Number.isFinite(n) && n > now + 1000);
+    } catch {}
+    if (!schedule.length && !hadStoredSchedule) {
+      schedule = buildRandomSnapshotSchedule(endAtUtcMs, nowServer);
+      try { localStorage.setItem(key, JSON.stringify(schedule)); } catch {}
+    }
+
+    for (let i = 0; i < schedule.length; i++) {
+      const at = Number(schedule[i]);
+      const delay = Math.max(1000, at - now);
+      const id = setTimeout(()=> {
+        void captureAndUploadSnapshot(`random_check_${i + 1}`);
+      }, delay);
+      randomSnapshotTimers.push(id);
+    }
+  }
+
   function showFinalScreen(disqualified){
     setExamStarted(false);
+    clearRandomSnapshotTimers();
 
     try{
       const timerId = getTimerId();
@@ -124,6 +183,7 @@ export function createExamFlowHelpers(ctx){
 
   function startTimerAbsolute(endAtUtcMs, nowServer){
     const targetEnd = Number(endAtUtcMs || 0);
+    if (!Number.isFinite(targetEnd) || targetEnd <= 0) return;
     localStorage.setItem(LS_KEY("endAt"), String(targetEnd));
 
     const tick = async ()=>{
@@ -206,7 +266,7 @@ export function createExamFlowHelpers(ctx){
     const serverNow = Number(first.serverNow || Date.now());
     const openAt = Number(first.openAtUtc || 0);
     const endAt = Number(first.endAtUtc || 0);
-    const offset = serverNow - Date.now();
+    let offset = serverNow - Date.now();
     const nowServer = () => Date.now() + offset;
 
     if (first.status === "ended") {
@@ -263,8 +323,29 @@ export function createExamFlowHelpers(ctx){
       return;
     }
 
+    const getPersonalEndAt = (src)=> {
+      const s = src?.session || src || {};
+      const personalEndAt = Number(s.personalEndAtUtc || 0);
+      if (Number.isFinite(personalEndAt) && personalEndAt > 0) return personalEndAt;
+      const startedAt = Number(s.startedAtUtc || 0);
+      if (Number.isFinite(startedAt) && startedAt > 0) return startedAt + PERSONAL_EXAM_DURATION_MS;
+      return 0;
+    };
+
     setRandomizedPayload(buildRandomizedPayload(sessionData.test.payload));
     const randomizedPayload = getRandomizedPayload();
+    let examRendered = false;
+    let autosaveWired = false;
+    const ensureExamRendered = ()=> {
+      if (!examRendered){
+        renderTest(getRandomizedPayload());
+        examRendered = true;
+      }
+      if (!autosaveWired){
+        wireAutosave();
+        autosaveWired = true;
+      }
+    };
 
     elTitle.textContent = sessionData.test.title;
     if (elExamFlowText) {
@@ -281,7 +362,17 @@ export function createExamFlowHelpers(ctx){
     elStartExam.disabled = true;
 
     setTimerAutoSubmit(false);
-    if (endAt) startTimerAbsolute(endAt, nowServer);
+    let alreadyStarted = !!Number(sessionData?.session?.startedAtUtc || 0);
+    if (alreadyStarted){
+      setTimerAutoSubmit(true);
+      ensureExamRendered();
+      const personalEndAt = getPersonalEndAt(sessionData);
+      startTimerAbsolute(personalEndAt, nowServer);
+      scheduleRandomSnapshots(personalEndAt, nowServer);
+    } else {
+      elTimer.textContent = "60:00";
+      try { localStorage.removeItem(LS_KEY("endAt")); } catch {}
+    }
 
     if (localStorage.getItem(LS_KEY("submitted")) === "1"){
       showStatus("This device already submitted this token.", "bad");
@@ -431,7 +522,7 @@ export function createExamFlowHelpers(ctx){
           showGateNotice("Please enter fullscreen to start the exam.", "bad");
           return;
         }
-        if (endAt && nowServer() > endAt) {
+        if (!alreadyStarted && endAt && nowServer() > endAt) {
           const endIso = fmtLocalStamp(endAt);
           elGate.style.display = "none";
           elContent.style.display = "none";
@@ -448,7 +539,12 @@ export function createExamFlowHelpers(ctx){
         if (stopGateLoop) stopGateLoop();
         setTimerAutoSubmit(true);
 
-        await apiPost(`/api/session/${encodeURIComponent(token)}/start`, {});
+        const startInfo = await apiPost(`/api/session/${encodeURIComponent(token)}/start`, {});
+        const startServerNow = Number(startInfo?.serverNow || 0);
+        if (Number.isFinite(startServerNow) && startServerNow > 0) offset = startServerNow - Date.now();
+        const personalEndAt = getPersonalEndAt(startInfo);
+        if (!personalEndAt) throw new Error("Could not start personal exam timer.");
+        alreadyStarted = true;
         await pingPresence("exam_started");
 
         elGate.style.display = "none";
@@ -456,19 +552,25 @@ export function createExamFlowHelpers(ctx){
         elSubmit.style.display = "block";
         setExamStarted(true);
         armAntiResetAndTabLock();
-        renderTest(getRandomizedPayload());
-        wireAutosave();
+        ensureExamRendered();
         armTranslationGuard();
         await startCameraPresenceProctoring();
         setTimeout(() => { void captureAndUploadSnapshot("exam_start"); }, 5000);
-        startTimerAbsolute(endAt, nowServer);
+        setTimerAutoSubmit(true);
+        startTimerAbsolute(personalEndAt, nowServer);
+        scheduleRandomSnapshots(personalEndAt, nowServer);
       }catch(e){
         showGateNotice(String(e.message || e), "bad");
         elStartExam.disabled = false;
       }
     });
 
-    showGateNotice("Disable any translation program or extension for this site, then click Enable camera. Time is already running.", "");
+    showGateNotice(
+      alreadyStarted
+        ? "Disable any translation program or extension for this site, then click Enable camera. Your exam timer is running."
+        : "Disable any translation program or extension for this site, then click Enable camera. Your 60 minutes start when you click Start exam.",
+      ""
+    );
   }
 
   return {

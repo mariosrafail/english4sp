@@ -4,6 +4,13 @@ import { createWritingEditorHelpers } from "/admin-tests/writing.js";
 import { createQuestionsListHelpers } from "/admin-tests/questions.js";
 
 const elExamPeriod = qs("#examPeriod");
+const elWeightListening = qs("#weightListening");
+const elWeightReading = qs("#weightReading");
+const elWeightWriting = qs("#weightWriting");
+const elWeightSpeaking = qs("#weightSpeaking");
+const elWeightTotal = qs("#weightTotal");
+const elSaveWeights = qs("#btnSaveWeights");
+const elGradeWeightsBar = qs(".gradeWeightsBar");
 
 const elMcqEditor = qs("#mcqEditor");
 const elReadingTextEditor = qs("#readingTextEditor");
@@ -83,6 +90,7 @@ let _builderLockMeta = null;
 let _lastItemIdBySection = { listening: null, reading: null };
 let _listeningModalState = { open: false, sectionId: "listening", mode: "mcq", itemId: null, afterItemId: null };
 let _dndState = { dragging: false, sectionId: "", itemId: "", overCard: null, overAfter: false };
+const DEFAULT_GRADE_WEIGHTS = { listening: 20, reading: 20, writing: 20, speaking: 40 };
 let showListeningModal = () => {};
 let setListeningModalMode = () => {};
 let renderListeningModalOptions = () => {};
@@ -135,6 +143,65 @@ function cloneJson(x) {
   return JSON.parse(JSON.stringify(x || {}));
 }
 
+function normalizeWeightValue(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(n)));
+}
+
+function ensureGradeWeights(payload) {
+  const p = payload && typeof payload === "object" ? payload : {};
+  const src = p.gradeWeights && typeof p.gradeWeights === "object" ? p.gradeWeights : {};
+  p.gradeWeights = {
+    listening: normalizeWeightValue(src.listening, DEFAULT_GRADE_WEIGHTS.listening),
+    reading: normalizeWeightValue(src.reading, DEFAULT_GRADE_WEIGHTS.reading),
+    writing: normalizeWeightValue(src.writing, DEFAULT_GRADE_WEIGHTS.writing),
+    speaking: normalizeWeightValue(src.speaking, DEFAULT_GRADE_WEIGHTS.speaking),
+  };
+  return p.gradeWeights;
+}
+
+function readGradeWeightsInputs() {
+  return {
+    listening: normalizeWeightValue(elWeightListening?.value, DEFAULT_GRADE_WEIGHTS.listening),
+    reading: normalizeWeightValue(elWeightReading?.value, DEFAULT_GRADE_WEIGHTS.reading),
+    writing: normalizeWeightValue(elWeightWriting?.value, DEFAULT_GRADE_WEIGHTS.writing),
+    speaking: normalizeWeightValue(elWeightSpeaking?.value, DEFAULT_GRADE_WEIGHTS.speaking),
+  };
+}
+
+function gradeWeightsTotal(weights) {
+  const w = weights || {};
+  return (Number(w.listening) || 0) + (Number(w.reading) || 0) + (Number(w.writing) || 0) + (Number(w.speaking) || 0);
+}
+
+function renderGradeWeights() {
+  if (!_payload) return;
+  const w = ensureGradeWeights(_payload);
+  try { if (elWeightListening) elWeightListening.value = String(w.listening); } catch {}
+  try { if (elWeightReading) elWeightReading.value = String(w.reading); } catch {}
+  try { if (elWeightWriting) elWeightWriting.value = String(w.writing); } catch {}
+  try { if (elWeightSpeaking) elWeightSpeaking.value = String(w.speaking); } catch {}
+  updateGradeWeightTotal();
+}
+
+function updateGradeWeightTotal() {
+  const w = readGradeWeightsInputs();
+  const total = gradeWeightsTotal(w);
+  try { if (elWeightTotal) elWeightTotal.textContent = `${total}%`; } catch {}
+  try { if (elGradeWeightsBar) elGradeWeightsBar.classList.toggle("is-invalid", total !== 100); } catch {}
+  return total;
+}
+
+function applyGradeWeightsFromInputs() {
+  if (!_payload || typeof _payload !== "object") _payload = { version: 1, randomize: false, sections: [] };
+  const weights = readGradeWeightsInputs();
+  const total = gradeWeightsTotal(weights);
+  if (total !== 100) throw new Error(`Grade weights must add up to 100. Current total: ${total}%.`);
+  _payload.gradeWeights = weights;
+  updateGradeWeightTotal();
+}
+
 function fmtLocal(ms) {
   const n = Number(ms);
   if (!Number.isFinite(n) || n <= 0) return "";
@@ -182,6 +249,7 @@ function applyBuilderLocked() {
     elListeningModalAddOption,
     elListeningModalRemoveOption,
     elListeningModalBold,
+    elSaveWeights,
   ];
   for (const b of buttons) {
     try { if (b) b.disabled = locked; } catch {}
@@ -197,6 +265,10 @@ function applyBuilderLocked() {
     elWritingPrompt,
     elListeningModalQText,
     elListeningModalInfoText,
+    elWeightListening,
+    elWeightReading,
+    elWeightWriting,
+    elWeightSpeaking,
   ];
   for (const el of inputs) {
     try {
@@ -225,6 +297,12 @@ function applyBuilderLocked() {
     const when = fmtLocal(openAt);
     setOut(when ? `Locked (test started: ${when}).` : "Locked (test started).", false);
   }
+
+  try {
+    for (const el of [elWeightListening, elWeightReading, elWeightWriting, elWeightSpeaking]) {
+      if (el instanceof HTMLInputElement) el.disabled = locked;
+    }
+  } catch {}
 }
 
 function setEditorMode(mode) {
@@ -658,11 +736,13 @@ async function loadTest() {
   setBuilderLocked(!!r?.locked, { openAtUtc: r?.openAtUtc, serverNow: r?.serverNow, durationMinutes: r?.durationMinutes });
   _payload = r?.test || r?.payload || r || null;
   if (!_payload || typeof _payload !== "object") _payload = { version: 1, randomize: false, sections: [] };
+  ensureGradeWeights(_payload);
   ensureSection(_payload, "listening", "Part 1: Listening");
   ensureSection(_payload, "reading", "Part 2: Reading");
   ensureSection(_payload, "writing", "Part 3: Writing");
   ensureWritingDefaults();
   _payloadInitial = cloneJson(_payload);
+  renderGradeWeights();
   renderWritingEditorsFromPayload();
   renderQuestionsList();
   applyEditorsForTab(_qTab || "listening");
@@ -716,11 +796,13 @@ async function bootstrap() {
   }
 
   _payload = test && typeof test === "object" ? test : { version: 1, randomize: false, sections: [] };
+  ensureGradeWeights(_payload);
   ensureSection(_payload, "listening", "Part 1: Listening");
   ensureSection(_payload, "reading", "Part 2: Reading");
   ensureSection(_payload, "writing", "Part 3: Writing");
   ensureWritingDefaults();
   _payloadInitial = cloneJson(_payload);
+  renderGradeWeights();
   renderWritingEditorsFromPayload();
   renderQuestionsList();
   applyEditorsForTab(_qTab || "listening");
@@ -732,6 +814,7 @@ async function saveTest() {
   if (_builderLocked) throw new Error("Locked: test has started.");
   const ep = getSelectedExamPeriodId();
   if (!ep) throw new Error("Select an exam period first.");
+  applyGradeWeightsFromInputs();
   ensureWritingDefaults();
   const qs = `?examPeriodId=${encodeURIComponent(String(ep))}`;
   await apiPost(`/api/admin/tests${qs}`, { test: _payload });
@@ -765,6 +848,20 @@ function wireEvents() {
   });
 
   wireWritingEditorEvents();
+
+  for (const el of [elWeightListening, elWeightReading, elWeightWriting, elWeightSpeaking]) {
+    el?.addEventListener("input", () => updateGradeWeightTotal());
+  }
+
+  elSaveWeights?.addEventListener("click", async () => {
+    try {
+      applyGradeWeightsFromInputs();
+      await saveTest();
+      setOut("Weights saved.", true);
+    } catch (e) {
+      setOut(e?.message || "Save failed.", false);
+    }
+  });
 
   elExamPeriod?.addEventListener("change", async () => {
     try {

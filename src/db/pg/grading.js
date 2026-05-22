@@ -1,4 +1,5 @@
 function createPgGradingHelpers(deps) {
+  const { calculateWeightedGrade } = require("../../utils/section_grading");
   const {
     q,
     q1,
@@ -131,44 +132,17 @@ function createPgGradingHelpers(deps) {
     );
 
     const payload = await getAdminTest(Number(s.exam_period_id) || 1);
-    function norm(value) {
-      return String(value || "").trim().toLowerCase();
-    }
     const ansObj = (qg && typeof qg.answers_json === "object" && qg.answers_json) || {};
-    let objectiveEarned = 0;
-    let objectiveMax = 0;
-    const sectionIdNorm = (sec) => String(sec?.id || "").trim().toLowerCase();
-    for (const sec of payload.sections || []) {
-      const sidNorm = sectionIdNorm(sec);
-      const inObjectiveSection = sidNorm === "listening" || sidNorm === "reading" || sidNorm === "writing";
-      if (!inObjectiveSection) continue;
-
-      let writingTask1Active = true;
-      for (const item of sec.items || []) {
-        if (!item || !item.id || item.type === "info") continue;
-        if (sidNorm === "writing") {
-          if (item.type === "writing") writingTask1Active = false;
-          if (!writingTask1Active) continue;
-        }
-        const pts = Number(item.points || 0);
-        if (pts <= 0) continue;
-
-        let expected = "";
-        if (item.type === "mcq" || item.type === "listening-mcq") expected = answerToText(item, item.correctIndex);
-        else if (item.type === "tf") expected = answerToText(item, item.correct);
-        else if (item.type === "short") expected = answerToText(item, item.correctText);
-
-        if (!expected) continue;
-        const got = ansObj[item.id];
-        objectiveMax += pts;
-        if (norm(got) === norm(expected)) objectiveEarned += pts;
-      }
-    }
-    const objectivePercent = objectiveMax > 0 ? (objectiveEarned / objectiveMax) * 100 : 0;
-
     const spCalc = qg?.speaking_grade === null || qg?.speaking_grade === undefined ? 0 : Number(qg.speaking_grade);
     const wrCalc = qg?.writing_grade === null || qg?.writing_grade === undefined ? 0 : Number(qg.writing_grade);
-    const final = Math.round((objectivePercent * 0.6) + (wrCalc * 0.2) + (spCalc * 0.2));
+    const graded = calculateWeightedGrade({
+      payload,
+      answers: ansObj,
+      answerToText,
+      speakingGrade: spCalc,
+      writingGrade: wrCalc,
+    });
+    const final = graded.totalGrade;
 
     await q(
       `UPDATE public.question_grades
@@ -179,9 +153,22 @@ function createPgGradingHelpers(deps) {
 
     return {
       sessionId: sid,
-      objectiveEarned,
-      objectiveMax,
-      objectivePercent: Math.round(objectivePercent * 10) / 10,
+      weights: graded.weights,
+      listening: {
+        earned: graded.listening.earned,
+        max: graded.listening.max,
+        percent: Math.round(graded.listening.percent * 10) / 10,
+      },
+      reading: {
+        earned: graded.reading.earned,
+        max: graded.reading.max,
+        percent: Math.round(graded.reading.percent * 10) / 10,
+      },
+      writing: {
+        earned: Math.round(graded.writing.earned * 10) / 10,
+        max: graded.writing.max,
+        percent: Math.round(graded.writing.percent * 10) / 10,
+      },
       speakingGrade: spV,
       writingGrade: wrV,
       finalGrade: final,
@@ -292,7 +279,7 @@ function createPgGradingHelpers(deps) {
     await q("BEGIN;");
     try {
       await q(
-        "TRUNCATE public.speaking_slots, public.session_snapshots, public.session_listening_access, public.proctoring_acks, public.examiner_assignments, public.question_grades, public.sessions, public.candidates RESTART IDENTITY CASCADE;"
+        "TRUNCATE public.speaking_slots, public.session_snapshots, public.session_listening_access, public.exam_security_events, public.proctoring_acks, public.examiner_assignments, public.question_grades, public.sessions, public.candidates RESTART IDENTITY CASCADE;"
       );
       await q("COMMIT;");
       return { ok: true };

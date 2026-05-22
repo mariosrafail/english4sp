@@ -12,6 +12,12 @@ const DURATION_MINUTES = 60;
 const TEST_PAYLOAD_FULL = {
   version: 1,
   randomize: false,
+  gradeWeights: {
+    listening: 20,
+    reading: 20,
+    writing: 20,
+    speaking: 40,
+  },
   sections: [
     {
       id: "listening",

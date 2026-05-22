@@ -113,7 +113,13 @@ export function createExamStateHelpers(ctx){
 
     qsa("textarea").forEach((t)=>{
       if (!t.name) return;
-      if (typeof saved[t.name] === "string") t.value = saved[t.name];
+      if (typeof saved[t.name] === "string") {
+        t.value = saved[t.name];
+        try { t.dispatchEvent(new Event("input", { bubbles: true })); } catch {}
+        if (typeof t._updateWritingWordCounter === "function") {
+          try { t._updateWritingWordCounter(); } catch {}
+        }
+      }
     });
 
     qsa(".gap-blank[data-qid]").forEach((gap)=>{

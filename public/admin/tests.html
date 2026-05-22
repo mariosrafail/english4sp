@@ -41,6 +41,30 @@
         <div class="small">The exam has already started, so changes are disabled.</div>
       </div>
 
+      <div class="gradeWeightsBar" aria-label="Grade weights">
+        <div class="gradeWeightField">
+          <label for="weightListening">Listening %</label>
+          <input id="weightListening" class="form-control form-control-sm mono" type="number" min="0" max="100" step="1" inputmode="numeric"/>
+        </div>
+        <div class="gradeWeightField">
+          <label for="weightReading">Reading %</label>
+          <input id="weightReading" class="form-control form-control-sm mono" type="number" min="0" max="100" step="1" inputmode="numeric"/>
+        </div>
+        <div class="gradeWeightField">
+          <label for="weightWriting">Writing %</label>
+          <input id="weightWriting" class="form-control form-control-sm mono" type="number" min="0" max="100" step="1" inputmode="numeric"/>
+        </div>
+        <div class="gradeWeightField">
+          <label for="weightSpeaking">Speaking %</label>
+          <input id="weightSpeaking" class="form-control form-control-sm mono" type="number" min="0" max="100" step="1" inputmode="numeric"/>
+        </div>
+        <div class="gradeWeightTotal">
+          <div class="small muted">Total</div>
+          <div id="weightTotal" class="mono fw-bold">100%</div>
+        </div>
+        <button id="btnSaveWeights" class="btn btn-primary btn-sm" type="button">Save weights</button>
+      </div>
+
       <div class="admin-q-tabs admin-tests-top-tabs" role="tablist" aria-label="Test sections">
         <button class="admin-q-tab" type="button" role="tab" aria-selected="true" data-qtab="listening">Listening</button>
         <button class="admin-q-tab" type="button" role="tab" aria-selected="false" data-qtab="reading">Reading</button>

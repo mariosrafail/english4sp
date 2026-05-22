@@ -38,6 +38,8 @@ let listSessionSnapshots = async () => [];
 let getSessionSnapshotById = async () => null;
 let deleteSessionSnapshotById = async () => false;
 let listSnapshotSessions = async () => [];
+let addExamSecurityEvent = async () => null;
+let listExamSecurityEvents = async () => [];
 let presencePing = async () => true;
 let createSession = async () => ({ token: "", sessionId: 0 });
 let importCandidatesAndCreateSessions = async () => ({ sessions: [] });
@@ -147,6 +149,8 @@ function all(sql, params = []) {
   getSessionSnapshotById,
   deleteSessionSnapshotById,
   listSnapshotSessions,
+  addExamSecurityEvent,
+  listExamSecurityEvents,
   presencePing,
 } = createSqliteProctoringHelpers({
   get,
@@ -244,6 +248,9 @@ async function initDb() {
       name TEXT NOT NULL,
       submitted INTEGER NOT NULL DEFAULT 0,
       disqualified INTEGER NOT NULL DEFAULT 0,
+      submitted_at_utc_ms INTEGER,
+      started_at_utc_ms INTEGER,
+      personal_end_at_utc_ms INTEGER,
       FOREIGN KEY (exam_period_id) REFERENCES exam_periods(id)
     );
   `);
@@ -252,6 +259,9 @@ async function initDb() {
   try { await run(`ALTER TABLE sessions ADD COLUMN exam_period_id INTEGER;`); } catch {}
   try { await run(`ALTER TABLE sessions ADD COLUMN candidate_id INTEGER;`); } catch {}
   try { await run(`ALTER TABLE sessions ADD COLUMN disqualified INTEGER NOT NULL DEFAULT 0;`); } catch {}
+  try { await run(`ALTER TABLE sessions ADD COLUMN submitted_at_utc_ms INTEGER;`); } catch {}
+  try { await run(`ALTER TABLE sessions ADD COLUMN started_at_utc_ms INTEGER;`); } catch {}
+  try { await run(`ALTER TABLE sessions ADD COLUMN personal_end_at_utc_ms INTEGER;`); } catch {}
   try { await run(`UPDATE sessions SET exam_period_id = COALESCE(exam_period_id, 1);`); } catch {}
 
 
@@ -269,12 +279,17 @@ async function initDb() {
           token TEXT NOT NULL,
           name TEXT NOT NULL,
           submitted INTEGER NOT NULL DEFAULT 0,
+          disqualified INTEGER NOT NULL DEFAULT 0,
+          submitted_at_utc_ms INTEGER,
+          started_at_utc_ms INTEGER,
+          personal_end_at_utc_ms INTEGER,
           FOREIGN KEY (exam_period_id) REFERENCES exam_periods(id)
         );
       `);
       await run(`
-        INSERT INTO sessions_new (id, exam_period_id, candidate_id, token, name, submitted)
-        SELECT id, exam_period_id, candidate_id, token, name, submitted
+        INSERT INTO sessions_new (id, exam_period_id, candidate_id, token, name, submitted, disqualified, submitted_at_utc_ms, started_at_utc_ms, personal_end_at_utc_ms)
+        SELECT id, exam_period_id, candidate_id, token, name, submitted,
+               COALESCE(disqualified, 0), submitted_at_utc_ms, started_at_utc_ms, personal_end_at_utc_ms
         FROM sessions;
       `);
       await run(`DROP TABLE sessions;`);
@@ -296,6 +311,24 @@ async function initDb() {
     );
   `);
   await run(`CREATE INDEX IF NOT EXISTS idx_proctoring_acks_token ON proctoring_acks (token);`);
+
+  await run(`
+    CREATE TABLE IF NOT EXISTS exam_security_events (
+      id INTEGER PRIMARY KEY,
+      session_id INTEGER NOT NULL,
+      exam_period_id INTEGER,
+      candidate_id INTEGER,
+      event_type TEXT NOT NULL,
+      payload_json TEXT,
+      created_at_utc_ms INTEGER NOT NULL,
+      FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+      FOREIGN KEY (exam_period_id) REFERENCES exam_periods(id),
+      FOREIGN KEY (candidate_id) REFERENCES candidates(id)
+    );
+  `);
+  await run(`CREATE INDEX IF NOT EXISTS idx_exam_security_events_session_id ON exam_security_events (session_id);`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_exam_security_events_exam_period_id ON exam_security_events (exam_period_id);`);
+  await run(`CREATE INDEX IF NOT EXISTS idx_exam_security_events_event_type ON exam_security_events (event_type);`);
 
   // Exam snapshots (max N per session enforced in code)
   await run(`
@@ -669,4 +702,6 @@ module.exports = {
   deleteAllCoreData,
   issueListeningTicket,
   verifyListeningTicket,
+  addExamSecurityEvent,
+  listExamSecurityEvents,
 };

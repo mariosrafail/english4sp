@@ -1,4 +1,5 @@
 function createAdminTestHelpers(deps) {
+  const { normalizeGradeWeights } = require("../../utils/grading_weights");
   const {
     getTestPayloadFull,
   } = deps || {};
@@ -70,6 +71,7 @@ function createAdminTestHelpers(deps) {
     return {
       version: Number(p.version || 1) || 1,
       randomize: !!p.randomize,
+      gradeWeights: normalizeGradeWeights(p.gradeWeights),
       sections,
     };
   }

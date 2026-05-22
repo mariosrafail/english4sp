@@ -132,6 +132,49 @@ body.embed.tests-bs .card{
   background-color:#fff;
 }
 
+.tests-bs .gradeWeightsBar{
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr)) minmax(86px, auto) auto;
+  gap: 10px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: var(--radius);
+  background: rgba(17,24,39,0.018);
+}
+.tests-bs .gradeWeightField label{
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.tests-bs .gradeWeightField input{
+  height: 36px;
+}
+.tests-bs .gradeWeightTotal{
+  min-height: 36px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 4px 8px;
+  border: 1px solid rgba(17,24,39,0.10);
+  border-radius: 4px;
+  background: #fff;
+}
+.tests-bs .gradeWeightsBar.is-invalid{
+  border-color: rgba(239,68,68,0.55);
+  background: rgba(239,68,68,0.04);
+}
+.tests-bs .gradeWeightsBar.is-invalid #weightTotal{
+  color: rgba(153,27,27,1);
+}
+@media (max-width: 960px){
+  .tests-bs .gradeWeightsBar{
+    grid-template-columns: repeat(2, minmax(130px, 1fr));
+  }
+}
+
 /* Align the dropdown + Save button on the same baseline */
 .tests-bs .testsHeader .right .form-select{
   height: 38px;

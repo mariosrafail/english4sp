@@ -34,6 +34,8 @@ const {
   listSnapshotSessions,
   issueListeningTicket,
   verifyListeningTicket,
+  addExamSecurityEvent,
+  listExamSecurityEvents,
 } = createPgProctoringHelpers({
   q,
   q1,
@@ -350,6 +352,9 @@ async function initDb() {
       token TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
       submitted BOOLEAN NOT NULL DEFAULT FALSE,
+      submitted_at_utc_ms BIGINT,
+      started_at_utc_ms BIGINT,
+      personal_end_at_utc_ms BIGINT,
       CONSTRAINT sessions_exam_period_fk FOREIGN KEY (exam_period_id) REFERENCES exam_periods(id),
       CONSTRAINT sessions_candidate_fk FOREIGN KEY (candidate_id) REFERENCES candidates(id)
     );
@@ -359,6 +364,9 @@ async function initDb() {
   await q(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS exam_period_id INT;`);
   await q(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS candidate_id BIGINT;`);
   await q(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS disqualified BOOLEAN NOT NULL DEFAULT FALSE;`);
+  await q(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS submitted_at_utc_ms BIGINT;`);
+  await q(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS started_at_utc_ms BIGINT;`);
+  await q(`ALTER TABLE sessions ADD COLUMN IF NOT EXISTS personal_end_at_utc_ms BIGINT;`);
   await q(`CREATE INDEX IF NOT EXISTS idx_sessions_exam_period_id ON sessions(exam_period_id);`);
   await q(`CREATE INDEX IF NOT EXISTS idx_sessions_candidate_id ON sessions(candidate_id);`);
   await q(`CREATE INDEX IF NOT EXISTS idx_sessions_exam_period_candidate ON sessions(exam_period_id, candidate_id);`);
@@ -374,6 +382,24 @@ async function initDb() {
     );
   `);
   await q(`CREATE INDEX IF NOT EXISTS idx_proctoring_acks_token ON public.proctoring_acks(token);`);
+
+  await q(`
+    CREATE TABLE IF NOT EXISTS public.exam_security_events (
+      id SERIAL PRIMARY KEY,
+      session_id INT NOT NULL,
+      exam_period_id INT,
+      candidate_id BIGINT,
+      event_type TEXT NOT NULL,
+      payload_json JSONB,
+      created_at_utc_ms BIGINT NOT NULL,
+      CONSTRAINT exam_security_events_session_fk FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE CASCADE,
+      CONSTRAINT exam_security_events_exam_period_fk FOREIGN KEY (exam_period_id) REFERENCES public.exam_periods(id),
+      CONSTRAINT exam_security_events_candidate_fk FOREIGN KEY (candidate_id) REFERENCES public.candidates(id)
+    );
+  `);
+  await q(`CREATE INDEX IF NOT EXISTS idx_exam_security_events_session_id ON public.exam_security_events(session_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_exam_security_events_exam_period_id ON public.exam_security_events(exam_period_id);`);
+  await q(`CREATE INDEX IF NOT EXISTS idx_exam_security_events_event_type ON public.exam_security_events(event_type);`);
 
   // Exam snapshots (max N per session enforced in code)
   await q(`
@@ -918,6 +944,8 @@ module.exports = {
   deleteSessionSnapshotById,
   issueListeningTicket,
   verifyListeningTicket,
+  addExamSecurityEvent,
+  listExamSecurityEvents,
   getConfig,
   getAdminTest,
   setAdminTest,

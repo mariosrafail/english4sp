@@ -1,4 +1,5 @@
 function createSqliteGradingHelpers(deps) {
+  const { calculateWeightedGrade } = require("../../utils/section_grading");
   const {
     run,
     get,
@@ -51,40 +52,17 @@ function createSqliteGradingHelpers(deps) {
     let ansObj = {};
     try { ansObj = JSON.parse(String(q?.answers_json || "{}")); } catch {}
 
-    const payload = await getAdminTest(Number(s.exam_period_id) || 1);
-    let objectiveEarned = 0;
-    let objectiveMax = 0;
-    const sectionIdNorm = (sec) => String(sec?.id || "").trim().toLowerCase();
-    for (const sec of payload.sections || []) {
-      const sidNorm = sectionIdNorm(sec);
-      const inObjectiveSection = sidNorm === "listening" || sidNorm === "reading" || sidNorm === "writing";
-      if (!inObjectiveSection) continue;
-
-      let writingTask1Active = true;
-      for (const item of sec.items || []) {
-        if (!item || !item.id || item.type === "info") continue;
-        if (sidNorm === "writing") {
-          if (item.type === "writing") writingTask1Active = false;
-          if (!writingTask1Active) continue;
-        }
-        const pts = Number(item.points || 0);
-        if (pts <= 0) continue;
-
-        let expected = "";
-        if (item.type === "mcq" || item.type === "listening-mcq") expected = answerToText(item, item.correctIndex);
-        else if (item.type === "tf") expected = answerToText(item, item.correct);
-        else if (item.type === "short") expected = answerToText(item, item.correctText);
-        if (!expected) continue;
-
-        const got = String(ansObj[item.id] ?? "").trim().toLowerCase();
-        objectiveMax += pts;
-        if (got === String(expected).trim().toLowerCase()) objectiveEarned += pts;
-      }
-    }
-    const objectivePercent = objectiveMax > 0 ? (objectiveEarned / objectiveMax) * 100 : 0;
     const spCalc = spV === null ? 0 : spV;
     const wrCalc = wrV === null ? 0 : wrV;
-    const total = Math.round((objectivePercent * 0.6) + (wrCalc * 0.2) + (spCalc * 0.2));
+    const payload = await getAdminTest(Number(s.exam_period_id) || 1);
+    const graded = calculateWeightedGrade({
+      payload,
+      answers: ansObj,
+      answerToText,
+      speakingGrade: spCalc,
+      writingGrade: wrCalc,
+    });
+    const total = graded.totalGrade;
 
     await run(
       `UPDATE question_grades
@@ -95,9 +73,22 @@ function createSqliteGradingHelpers(deps) {
 
     return {
       sessionId: sid,
-      objectiveEarned,
-      objectiveMax,
-      objectivePercent: Math.round(objectivePercent * 10) / 10,
+      weights: graded.weights,
+      listening: {
+        earned: graded.listening.earned,
+        max: graded.listening.max,
+        percent: Math.round(graded.listening.percent * 10) / 10,
+      },
+      reading: {
+        earned: graded.reading.earned,
+        max: graded.reading.max,
+        percent: Math.round(graded.reading.percent * 10) / 10,
+      },
+      writing: {
+        earned: Math.round(graded.writing.earned * 10) / 10,
+        max: graded.writing.max,
+        percent: Math.round(graded.writing.percent * 10) / 10,
+      },
       speakingGrade: spV,
       writingGrade: wrV,
       totalGrade: total,
@@ -172,11 +163,12 @@ function createSqliteGradingHelpers(deps) {
       await run("DELETE FROM proctoring_acks;");
       await run("DELETE FROM session_snapshots;");
       await run("DELETE FROM session_listening_access;");
+      await run("DELETE FROM exam_security_events;");
       await run("DELETE FROM sessions;");
       await run("DELETE FROM candidates;");
       try {
         await run(
-          "DELETE FROM sqlite_sequence WHERE name IN ('question_grades','proctoring_acks','session_snapshots','sessions','candidates');"
+          "DELETE FROM sqlite_sequence WHERE name IN ('question_grades','proctoring_acks','session_snapshots','session_listening_access','exam_security_events','sessions','candidates');"
         );
       } catch {}
       await run("COMMIT;");
@@ -240,6 +232,7 @@ function createSqliteGradingHelpers(deps) {
       await run(`DELETE FROM proctoring_acks WHERE session_id = ?;`, [sid]);
       await run(`DELETE FROM session_snapshots WHERE session_id = ?;`, [sid]);
       await run(`DELETE FROM session_listening_access WHERE session_id = ?;`, [sid]);
+      await run(`DELETE FROM exam_security_events WHERE session_id = ?;`, [sid]);
       const sdel = await run(`DELETE FROM sessions WHERE id = ?;`, [sid]);
 
       let candidateDeleted = false;

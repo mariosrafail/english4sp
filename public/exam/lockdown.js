@@ -26,6 +26,8 @@ export function createExamLockdownHelpers(ctx){
 
   let tabToastEl = null;
   let tabToastTimer = null;
+  let orientationGraceUntil = 0;
+  let orientationGraceTimer = null;
 
   const fullscreenRequired = (()=> {
     const ua = String(navigator.userAgent || "");
@@ -86,6 +88,21 @@ export function createExamLockdownHelpers(ctx){
   function hasExtendedDisplay(){
     try { return screen && screen.isExtended === true; } catch {}
     return false;
+  }
+
+  function markOrientationOrResizeGrace(){
+    // Mobile/tablet browsers can emit transient resize/fullscreen changes while
+    // rotating the device or while camera orientation settles. Re-check after a
+    // short grace period instead of treating the flicker as a fullscreen exit.
+    orientationGraceUntil = Math.max(orientationGraceUntil, Date.now() + 3000);
+    if (orientationGraceTimer) clearTimeout(orientationGraceTimer);
+    orientationGraceTimer = setTimeout(()=> {
+      orientationGraceTimer = null;
+    }, 3100);
+  }
+
+  function isFullscreenGraceActive(){
+    return Date.now() < orientationGraceUntil;
   }
 
   function setLockButton(mode, label){
@@ -211,12 +228,16 @@ export function createExamLockdownHelpers(ctx){
     });
   }
 
+  window.addEventListener("orientationchange", markOrientationOrResizeGrace);
+  window.addEventListener("resize", markOrientationOrResizeGrace);
+
   return {
     fullscreenRequired,
     isFullscreen,
     requestFullscreen,
     exitFullscreen,
     hasExtendedDisplay,
+    isFullscreenGraceActive,
     showLock,
     hideLock,
     showTabToast,

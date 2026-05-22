@@ -1,4 +1,4 @@
-import { renderWritingSection } from "/exam/renderers-writing.js";
+import { attachWritingWordCounter, hardenAllWritingTextareas, renderWritingSection } from "/exam/renderers-writing.js";
 import { renderListeningSection } from "/exam/renderers-listening.js";
 export function renderExamTest(payload, ctx){
   const {
@@ -10,6 +10,7 @@ export function renderExamTest(payload, ctx){
     registerCanvasTextBlock,
     clearCanvasTextBlocks,
     queueCanvasTextRender,
+    logSecurityEvent,
     getSectionKind,
     showSection,
     saveAnswers,
@@ -172,6 +173,12 @@ export function renderExamTest(payload, ctx){
           ta.name = item.id;
           ta.rows = item.type === "writing" ? 10 : 3;
           ta.placeholder = item.type === "writing" ? "Write your text here..." : "Type your answer...";
+          if (item.type === "writing"){
+            ta.dataset.writingTextarea = "true";
+            ta.autocomplete = "off";
+            const counter = attachWritingWordCounter(ta, item, { logSecurityEvent });
+            q.appendChild(counter);
+          }
           q.appendChild(ta);
         }
 
@@ -219,6 +226,7 @@ export function renderExamTest(payload, ctx){
 
     // Re-apply any saved answers after rendering
     restoreAnswers();
+    hardenAllWritingTextareas(elContent);
     const savedIdx = Number(localStorage.getItem(LS_KEY("sectionIdx")) || "0");
     showSection(Number.isFinite(savedIdx) ? savedIdx : 0);
   }

@@ -2,6 +2,7 @@ const path = require("path");
 const fs = require("fs");
 const crypto = require("crypto");
 const express = require("express");
+const { normalizeGradeWeights, gradeWeightsAreValid, gradeWeightsTotal } = require("../utils/grading_weights");
 
 module.exports = function registerAdminTestsRoutes(app, ctx) {
   const {
@@ -140,6 +141,17 @@ module.exports = function registerAdminTestsRoutes(app, ctx) {
 
     const testRaw = req.body?.test;
     const test = normalizeAdminTestPayload(testRaw);
+    try {
+      test.gradeWeights = normalizeGradeWeights(testRaw?.gradeWeights, { requireTotal: true });
+    } catch {
+      return res.status(400).json({
+        error: "invalid_grade_weights",
+        message: `Grade weights must add up to 100 (current total: ${gradeWeightsTotal(normalizeGradeWeights(testRaw?.gradeWeights))}).`,
+      });
+    }
+    if (!gradeWeightsAreValid(test.gradeWeights)) {
+      return res.status(400).json({ error: "invalid_grade_weights", message: "Grade weights must be whole numbers from 0 to 100 and add up to 100." });
+    }
     const hasAny = (test.sections || []).some((s) => (s.items || []).some((it) => it && it.type !== "info"));
     if (!hasAny) return res.status(400).json({ error: "Add at least one item" });
     for (const sec of test.sections || []) {
